@@ -1,8 +1,13 @@
 node_modules/
-.vercel/
-.env
-.env.*
-앨리스 서술형 채점 성향 분석기.html
-
 .vercel
 .env*
+
+# 학생 개인정보가 담길 수 있는 파일은 커밋 금지
+*.xlsx
+*.xls
+*.csv
+data/
+개인정보/
+*채점데이터*
+*백업*.html
+앨리스 서술형 채점 성향 분석기.html

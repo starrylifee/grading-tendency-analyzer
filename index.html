@@ -464,7 +464,7 @@
       </div>
     </div>
 
-    <footer>Solar Pro 3 (Upstage) 기반 · 입력 데이터는 분석 요청에만 사용되며 저장되지 않습니다</footer>
+    <footer>입력한 루브릭·답안은 분석을 위해 Solar Pro 3(Upstage, 국내) 서버로 전송됩니다. 이 앱과 서버는 데이터를 저장하지 않지만, 학생 이름·학번은 지우고 입력하세요.</footer>
   </div>
 
   <!-- Sample Modal -->
@@ -1537,11 +1537,16 @@ ${outFormat}`;
 
     $('exportPromptBtn').addEventListener('click', async () => {
       if (!state.analysisDone) return;
+      const exampleCount = state.analysisAnswers.filter(a => a.reason && a.reason.trim()).length ? Math.min(5, state.analysisAnswers.filter(a => a.reason && a.reason.trim()).length) : 0;
+      const warn = exampleCount
+        ? `이 프롬프트에는 채점 예시로 학생 답안 원문 ${exampleCount}개가 포함됩니다. ChatGPT 등 다른 서비스에 붙여넣으면 그 답안도 함께 전송되니, 학생 이름이 남아 있지 않은지 확인하세요. 계속 복사할까요?`
+        : `복사한 프롬프트를 ChatGPT·Claude·Solar 등에 붙여넣고 학생 답안을 주면 이 교사처럼 채점합니다. 계속 복사할까요?`;
+      if (!confirm(warn)) return;
       await navigator.clipboard.writeText(buildExportPrompt());
       const b = $('exportPromptBtn'); const t = b.textContent;
       b.textContent = '복사됨 ✓';
       setTimeout(() => { b.textContent = t; }, 2000);
-      showToast('AI 채점용 시스템 프롬프트가 복사되었습니다. ChatGPT·Claude·Solar 등에 붙여넣고 학생 답안을 주면 이 교사처럼 채점합니다.', 'good');
+      showToast('AI 채점용 시스템 프롬프트가 복사되었습니다.', 'good');
     });
 
     // ==================== MISC ====================

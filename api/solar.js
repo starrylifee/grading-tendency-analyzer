@@ -4,12 +4,27 @@ module.exports = async (req, res) => {
     return res.status(405).json({ error: 'POST 요청만 허용됩니다.' });
   }
 
-  const { messages, temperature } = req.body || {};
-  if (!Array.isArray(messages) || messages.length === 0) {
-    return res.status(400).json({ error: 'messages 배열이 필요합니다.' });
+  // 같은 사이트에서 온 요청만 허용 — 외부인이 이 엔드포인트로 무료 LLM을 남용하는 것 차단.
+  // 브라우저 fetch는 same-origin POST에도 Origin 헤더를 보내므로, 그 host가 배포 host와 같아야 통과.
+  const host = req.headers.host || '';
+  const originHeader = req.headers.origin || req.headers.referer || '';
+  let originOk = false;
+  try { originOk = !!originHeader && new URL(originHeader).host === host; } catch (e) { originOk = false; }
+  if (!originOk) {
+    return res.status(403).json({ error: '이 앱 화면에서만 사용할 수 있습니다.' });
   }
 
-  const totalChars = messages.reduce((s, m) => s + (m.content ? String(m.content).length : 0), 0);
+  const { messages, temperature } = req.body || {};
+  if (!Array.isArray(messages) || messages.length === 0 || messages.length > 3) {
+    return res.status(400).json({ error: 'messages 배열(1~3개)이 필요합니다.' });
+  }
+  // content는 문자열만 허용 — 객체/배열로 우회해 길이 검사를 피하는 것 방지
+  for (const m of messages) {
+    if (typeof m.content !== 'string' || typeof m.role !== 'string') {
+      return res.status(400).json({ error: 'messages의 role·content는 문자열이어야 합니다.' });
+    }
+  }
+  const totalChars = messages.reduce((s, m) => s + m.content.length, 0);
   if (totalChars > 200000) {
     return res.status(413).json({ error: '입력이 너무 깁니다.' });
   }
@@ -30,6 +45,7 @@ module.exports = async (req, res) => {
         model: 'solar-pro3',
         messages,
         temperature: typeof temperature === 'number' ? temperature : 0.3,
+        max_tokens: 8000,
         stream: false
       })
     });

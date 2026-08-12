@@ -324,7 +324,10 @@
       <div class="card">
         <div class="card-head">
           <span class="card-title">학생 답안 · 교사 채점 <span class="tag" id="scaleTag">만점 100점</span></span>
-          <span style="font-size:0.83rem; color:var(--ink-2);">최소 7개 · 권장 10~20개 (답안 수의 20%, 최대 3개를 검증용으로 자동 분리)</span>
+          <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+            <span style="font-size:0.83rem; color:var(--ink-2);">최소 7개 · 권장 10~20개 (자동 검증 분리)</span>
+            <button class="btn btn-ghost btn-sm" id="pasteBtn" type="button">엑셀에서 붙여넣기</button>
+          </div>
         </div>
         <div class="card-body">
           <div class="alert alert-warn" style="font-size:0.85rem;">학생 이름·학번 등 개인정보는 답안 텍스트에서 <b>지우고</b> 입력하세요. 답안은 AI 분석 요청에 전송됩니다.</div>
@@ -482,6 +485,29 @@
       <div class="modal-foot">
         <button class="btn btn-ghost" id="sampleCancel">취소</button>
         <button class="btn btn-primary" id="sampleApply">적용하기</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Paste Modal -->
+  <div class="modal-overlay" id="pasteModal">
+    <div class="modal">
+      <div class="modal-head">
+        <span class="modal-title">엑셀에서 붙여넣기</span>
+        <button class="modal-x" id="pasteClose">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p style="font-size:0.88rem; color:var(--ink-2); margin-bottom:8px;">
+          엑셀·한글 표에서 <b>[답안 · 채점 · 이유]</b> 순서로 열을 복사해 아래에 붙여넣으세요. 셋째 열(이유)은 없어도 됩니다. 첫 줄이 제목이면 자동으로 건너뜁니다.
+        </p>
+        <p class="hint" style="margin-bottom:10px;">채점 칸은 <span id="pasteScaleHint">점수(숫자)</span> 형식입니다.</p>
+        <textarea id="pasteArea" style="min-height:150px; font-size:0.9rem;" placeholder="답안을 붙여넣으세요 (탭으로 열이 구분됩니다)"></textarea>
+        <div id="pastePreview" style="margin-top:12px;"></div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn btn-ghost" id="pasteCancel">취소</button>
+        <button class="btn btn-ghost" id="pasteAppend" disabled>기존에 추가</button>
+        <button class="btn btn-primary" id="pasteReplace" disabled>기존 지우고 넣기</button>
       </div>
     </div>
   </div>
@@ -677,6 +703,95 @@
         }
       }
     });
+
+    // ==================== 엑셀 붙여넣기 ====================
+    // 엑셀/한글 표를 복사하면 셀은 탭, 행은 개행으로 온다. 셀 안에 개행·탭이 있으면 큰따옴표로 감싸진다.
+    function parseTSV(text) {
+      const rows = []; let row = [], cell = '', inQ = false;
+      for (let i = 0; i < text.length; i++) {
+        const c = text[i];
+        if (inQ) {
+          if (c === '"') { if (text[i + 1] === '"') { cell += '"'; i++; } else inQ = false; }
+          else cell += c;
+        } else if (c === '"') inQ = true;
+        else if (c === '\t') { row.push(cell); cell = ''; }
+        else if (c === '\r') { /* skip */ }
+        else if (c === '\n') { row.push(cell); rows.push(row); row = []; cell = ''; }
+        else cell += c;
+      }
+      if (cell !== '' || row.length) { row.push(cell); rows.push(row); }
+      return rows.filter(r => r.some(c => c.trim()));
+    }
+
+    // 붙여넣은 표를 답안 객체로 해석 (열: 답안 | 점수/등급 | 이유)
+    function interpretPaste(text) {
+      let rows = parseTSV(text);
+      if (!rows.length) return { items: [], skippedHeader: false, badScore: 0 };
+      // 첫 줄이 제목(둘째 칸이 점수도 등급도 아님 + 제목 키워드)이면 건너뜀
+      let skippedHeader = false;
+      const h = rows[0];
+      const secondIsData = h[1] != null && (state.mode === 'grade' ? state.gradeLabels.includes(h[1].trim()) : Number.isFinite(parseFloat(h[1])));
+      if (!secondIsData && /답안|점수|등급|이유|채점|번호|이름/.test(h.join(' '))) { rows = rows.slice(1); skippedHeader = true; }
+      let badScore = 0;
+      const items = rows.map(r => {
+        const text = (r[0] || '').trim();
+        const rawScore = (r[1] || '').trim();
+        const reason = (r[2] || '').trim();
+        const item = { text, reason };
+        if (state.mode === 'grade') {
+          item.grade = state.gradeLabels.includes(rawScore) ? rawScore : '';
+          if (rawScore && !item.grade) badScore++;
+        } else {
+          const n = parseFloat(rawScore);
+          item.score = Number.isFinite(n) ? n : null;
+          if (rawScore && item.score === null) badScore++;
+        }
+        return item;
+      }).filter(it => it.text);
+      return { items, skippedHeader, badScore };
+    }
+
+    let pasteItems = [];
+    function renderPastePreview() {
+      const text = $('pasteArea').value;
+      const prev = $('pastePreview');
+      if (!text.trim()) { prev.innerHTML = ''; pasteItems = []; $('pasteAppend').disabled = $('pasteReplace').disabled = true; return; }
+      const { items, skippedHeader, badScore } = interpretPaste(text);
+      pasteItems = items;
+      const canApply = items.length > 0;
+      $('pasteAppend').disabled = $('pasteReplace').disabled = !canApply;
+      if (!canApply) { prev.innerHTML = `<div class="alert alert-warn" style="margin:0;">인식된 답안이 없습니다. 열 순서(답안·채점·이유)를 확인하세요.</div>`; return; }
+      const scaleCol = state.mode === 'grade' ? '등급' : '점수';
+      const rowsHtml = items.slice(0, 5).map((it, i) =>
+        `<tr><td style="color:var(--ink-3);">${i + 1}</td><td style="max-width:320px;">${esc(truncate(it.text, 50))}</td><td class="center">${esc(state.mode === 'grade' ? (it.grade || '—') : (it.score ?? '—'))}</td><td>${esc(truncate(it.reason, 30))}</td></tr>`).join('');
+      prev.innerHTML =
+        `<div class="alert alert-good" style="margin-bottom:10px;"><b>${items.length}개 답안</b>이 인식되었습니다.${skippedHeader ? ' (제목 줄 1개 건너뜀)' : ''}${badScore ? ` <span style="color:var(--warn);">· ${scaleCol} 인식 실패 ${badScore}개는 빈칸으로 들어갑니다.</span>` : ''}</div>
+         <div class="table-wrap"><table style="font-size:0.85rem;"><thead><tr><th>#</th><th>답안</th><th class="center">${scaleCol}</th><th>이유</th></tr></thead><tbody>${rowsHtml}</tbody></table></div>
+         ${items.length > 5 ? `<p class="hint" style="margin-top:6px;">…외 ${items.length - 5}개</p>` : ''}`;
+    }
+    function applyPaste(replace) {
+      if (!pasteItems.length) return;
+      const mapped = pasteItems.map(it => ({ id: uid(), text: it.text, reason: it.reason, ...(state.mode === 'grade' ? { grade: it.grade } : { score: it.score }) }));
+      if (replace) state.answers = mapped;
+      else state.answers = [...state.answers.filter(a => a.text.trim() || Number.isFinite(a.score) || a.grade), ...mapped];
+      renderAnswersTable();
+      $('pasteModal').classList.remove('visible');
+      $('pasteArea').value = ''; $('pastePreview').innerHTML = '';
+      showToast(`${mapped.length}개 답안을 ${replace ? '불러왔습니다' : '추가했습니다'}.`, 'good');
+    }
+    $('pasteBtn').addEventListener('click', () => {
+      $('pasteScaleHint').textContent = state.mode === 'grade' ? `등급(${state.gradeLabels.join('/')})` : '점수(숫자)';
+      $('pasteArea').value = ''; $('pastePreview').innerHTML = '';
+      $('pasteAppend').disabled = $('pasteReplace').disabled = true;
+      $('pasteModal').classList.add('visible');
+      setTimeout(() => $('pasteArea').focus(), 50);
+    });
+    $('pasteArea').addEventListener('input', renderPastePreview);
+    $('pasteClose').addEventListener('click', () => $('pasteModal').classList.remove('visible'));
+    $('pasteCancel').addEventListener('click', () => $('pasteModal').classList.remove('visible'));
+    $('pasteModal').addEventListener('click', e => { if (e.target === $('pasteModal')) $('pasteModal').classList.remove('visible'); });
+    $('pasteReplace').addEventListener('click', () => applyPaste(true));
+    $('pasteAppend').addEventListener('click', () => applyPaste(false));
 
     // ==================== SAMPLE DATA ====================
     const sampleSubjects = {

@@ -307,7 +307,7 @@
       <div class="card">
         <div class="card-head">
           <span class="card-title">학생 답안 · 교사 채점 <span class="tag" id="scaleTag">만점 100점</span></span>
-          <span style="font-size:0.83rem; color:var(--ink-2);">최소 7개 · 권장 10~20개 (검증용 3개는 자동 분리)</span>
+          <span style="font-size:0.83rem; color:var(--ink-2);">최소 7개 · 권장 10~20개 (답안 수의 20%, 최대 3개를 검증용으로 자동 분리)</span>
         </div>
         <div class="card-body">
           <div class="table-wrap">
@@ -980,7 +980,7 @@
         : '';
       const systemPrompt = `당신은 채점 안내문 작성 전문가입니다. 기존 루브릭에 교사의 채점 성향을 반영한 완성된 채점 안내문을 작성하세요.
 구성: 1) 기존 루브릭(원문 유지) 2) 교사 채점 성향 분석 결과(각 성향에 양적 보정값 명시) 3) 종합 채점 가이드라인(보정값 기반 실용 지침)
-전문적이고 격식 있는 문체. 마크다운 기호 남용 금지.`;
+전문적이고 격식 있는 문체로 쓰되, 반드시 일반 텍스트로만 작성하세요. 마크다운 기호(#, *, |, 표, 코드블록)를 절대 쓰지 말고 「1. / 1-1. / -」 같은 번호와 들여쓰기로만 구조화하세요. 이 문서는 복사해서 그대로 인쇄·배부됩니다.`;
       const prompt = `[기존 루브릭]\n${state.rubric}\n\n[분석된 교사 채점 성향]\n${state.tendencies.map((t, i) => `${i + 1}. ${t}`).join('\n')}\n\n[양적 보정표]\n${calibText}\n\n[전체 엄격성 오프셋]\n교사는 루브릭 대비 평균 ${state.overallOffset > 0 ? '+' : ''}${state.overallOffset}점 (100점 정규화 기준, 음수=엄격, 양수=관대)${scaleNote}\n\n위 내용을 통합해, 다른 채점자가 그대로 쓸 수 있을 만큼 구체적이고 실용적인 최종 채점 안내문을 작성하세요.`;
       return await callLLM(prompt, systemPrompt, 0.4);
     }

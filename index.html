@@ -498,10 +498,14 @@
       comparisonData: [],
       finalDocument: '',
       validationResults: [],
+      validationRubricOnly: [],
       diagnoses: [],
+      round: 1,               // 보정 회차 (연구 루프의 vN에 해당)
+      roundHistory: [],       // [{round, matches, total}]
       isAnalyzing: false,
       analysisDone: false
     };
+    const MAX_ROUNDS = 3;
 
     // ==================== 정규화 ====================
     // 내부 분석은 전부 0~100 정규화 점수로, 표시는 원척도(점수 또는 등급)로.
@@ -1000,6 +1004,7 @@
         // [4] 검증: 루브릭만
         progress.start(4);
         const rubricOnly = await gradeWithRubricOnly(state.rubric, state.validationAnswers, (d, t) => progress.note(4, `${d}/${t} 답안 완료`));
+        state.validationRubricOnly = rubricOnly;
         progress.finish(4);
 
         // [5] 검증: 성향 반영 (3회 병렬 앙상블)
@@ -1020,6 +1025,8 @@
         state.diagnoses = await diagnoseMismatches();
         progress.finish(6);
 
+        state.round = 1;
+        state.roundHistory = [{ round: 1, matches: state.validationResults.filter(v => v.tendencyMatch).length, total: state.validationResults.length }];
         state.analysisDone = true;
         steps[2].classList.add('done'); steps[3].disabled = false;
         renderOutputResults();
@@ -1295,11 +1302,20 @@
       const mismCount = state.validationResults.filter(v => !v.tendencyMatch).length;
       if (!state.validationResults.length) { diagCard.style.display = 'none'; return; }
       diagCard.style.display = 'block';
+      const historyLine = state.roundHistory.length > 1
+        ? `<div class="alert alert-info">보정 이력: ${state.roundHistory.map(h => `${h.round}차 ${h.matches}/${h.total} 일치`).join(' → ')}</div>`
+        : '';
       if (mismCount === 0) {
-        $('diagBody').innerHTML = `<div class="alert alert-good" style="margin-bottom:0;"><b>모든 검증 답안이 일치했습니다.</b> 추출된 성향이 이 교사의 채점을 잘 재현합니다. 안내문을 그대로 활용하셔도 좋습니다.</div>`;
+        $('diagBody').innerHTML = historyLine + `<div class="alert alert-good" style="margin-bottom:0;"><b>모든 검증 답안이 일치했습니다.</b> 추출된 성향이 이 교사의 채점을 잘 재현합니다. 안내문을 그대로 활용하셔도 좋습니다.</div>`;
         return;
       }
-      $('diagBody').innerHTML =
+      const refineBlock = state.round < MAX_ROUNDS
+        ? `<div style="text-align:center; margin-top:16px;">
+             <button class="btn btn-primary" id="refineBtn">${state.round + 1}차 보정 실행 — 진단을 반영해 성향 수정 후 재검증</button>
+             <p class="hint" style="margin-top:8px;">연구 검증 결과, 이런 보정 루프를 반복할수록 재현율이 올라갑니다 (최대 ${MAX_ROUNDS}차).</p>
+           </div>`
+        : `<div class="alert alert-info" style="margin-top:16px; margin-bottom:0;">최대 보정 회차(${MAX_ROUNDS}차)에 도달했습니다. 남은 불일치는 답안·채점 이유를 보완해 새로 분석하는 것을 권합니다.</div>`;
+      $('diagBody').innerHTML = historyLine +
         `<div class="alert alert-warn">검증 답안 ${state.validationResults.length}개 중 <b>${mismCount}개가 불일치</b>했습니다. 아래 진단을 참고해 원인을 확인하세요.</div>` +
         state.diagnoses.map(({ item, diag }, i) => {
           const meta = diag && DIAG_META[diag.type] ? DIAG_META[diag.type] : { label: '진단 실패', cls: 'etc' };
@@ -1315,7 +1331,82 @@
             </div>
             <div class="diag-body">${body}</div>
           </div>`;
-        }).join('');
+        }).join('') + refineBlock;
+      const rb = $('refineBtn');
+      if (rb) rb.addEventListener('click', runRefineRound);
+    }
+
+    // ==================== 보정 루프 (연구의 vN → vN+1 회차에 해당) ====================
+    async function refineTendencies() {
+      const calibText = state.calibration.length
+        ? state.calibration.map((c, i) => `${i + 1}. [${c.방향}] ${c.성향} — ${c.평균점수범위}점 (조건: ${c.적용조건})`).join('\n')
+        : '(없음)';
+      const diagText = state.diagnoses.map(({ item, diag }, i) =>
+        `사례 ${i + 1}: 답안 "${item.answer.text.slice(0, 250)}"\n  교사 실제 ${fmtOrig(item.teacherNorm)} (이유: ${item.answer.reason || '없음'}) / 루브릭만 ${fmtOrig(item.rubricNorm)} / 성향 반영 예측 ${fmtOrig(item.tendencyNorm)}\n  진단: ${diag ? `${diag.type} — ${diag.explanation || ''} / 제안: ${diag.suggestion || ''}` : '자동 진단 실패'}`
+      ).join('\n\n');
+      const systemPrompt = `당신은 교사 채점 성향 프롬프트를 개선하는 루프 조정자입니다. 점수는 ${scaleDesc()}입니다.
+
+현재 성향·보정표로 예측했을 때 불일치가 난 검증 사례와 그 진단이 주어집니다. 불일치가 해소되도록 성향과 보정표를 수정하세요.
+
+[수정 원칙]
+1. 진단이 SYSTEM_MISS면 놓친 감점/가점 요인을 새 성향·보정 항목으로 추가한다.
+2. 진단이 SYSTEM_OVER면 과도한 보정 항목의 폭을 줄이거나 적용조건을 좁힌다.
+3. 진단이 TEACHER_INCONSISTENT면 그 사례 하나에 과적합하지 말고 기존 성향을 유지한다.
+4. 이미 잘 맞는 성향은 절대 삭제하지 않는다. 수정은 최소한으로.
+5. 성향은 최대 6개, 보정표는 최대 8개.
+
+출력: JSON 객체 하나만.
+{"tendencies": ["이 교사는 ~", ...], "calibration": [{"성향":"...","방향":"감점|가점","평균점수범위":"-10~-15","적용조건":"..."}]}`;
+      const prompt = `[루브릭]\n${state.rubric}\n\n[현재 성향 (${state.round}차)]\n${state.tendencies.map((t, i) => `${i + 1}. ${t}`).join('\n')}\n\n[현재 보정표]\n${calibText}\n\n[교사의 전체 채점 패턴 (분석용 답안)]\n${state.analysisAnswers.map(a => `- 답안: ${a.text.slice(0, 120)} / 교사: ${fmtOrig(a.normScore)} / 이유: ${a.reason || '없음'}`).join('\n')}\n\n[불일치 사례와 진단]\n${diagText}\n\n위 수정 원칙대로 성향과 보정표를 개선해 JSON 객체 하나로만 응답하세요.`;
+      const parsed = await callJSONObject(prompt, systemPrompt, 0.3);
+      const tendencies = Array.isArray(parsed.tendencies) ? parsed.tendencies.slice(0, 6) : state.tendencies;
+      const calibration = Array.isArray(parsed.calibration)
+        ? parsed.calibration.slice(0, 8).map(c => ({
+            성향: c.성향 || c.tendency || '', 방향: c.방향 || c.direction || '',
+            평균점수범위: c.평균점수범위 || c.점수범위 || c.scoreRange || '', 적용조건: c.적용조건 || c.condition || ''
+          }))
+        : state.calibration;
+      return { tendencies, calibration };
+    }
+
+    async function runRefineRound() {
+      if (state.isAnalyzing || state.round >= MAX_ROUNDS) return;
+      state.isAnalyzing = true;
+      const btn = $('refineBtn');
+      const setBtn = t => { if (btn) { btn.disabled = true; btn.textContent = t; } };
+      try {
+        setBtn('성향 수정 중... (1/4)');
+        const revised = await refineTendencies();
+        state.tendencies = revised.tendencies;
+        state.calibration = revised.calibration;
+        setBtn('안내문 재작성 중... (2/4)');
+        state.finalDocument = await generateFinalDocument();
+        setBtn('검증 재채점 중... (3/4)');
+        const tendencyScores = await predictWithTendency(state.validationRubricOnly);
+        state.validationResults = state.validationAnswers.map((a, i) => ({
+          answer: a,
+          teacherNorm: a.normScore,
+          rubricNorm: state.validationRubricOnly[i],
+          tendencyNorm: tendencyScores[i],
+          rubricMatch: bandsMatch(state.validationRubricOnly[i], a.normScore),
+          tendencyMatch: bandsMatch(tendencyScores[i], a.normScore)
+        }));
+        setBtn('불일치 진단 중... (4/4)');
+        state.diagnoses = await diagnoseMismatches();
+        state.round++;
+        const matches = state.validationResults.filter(v => v.tendencyMatch).length;
+        state.roundHistory.push({ round: state.round, matches, total: state.validationResults.length });
+        renderAnalysisResults();
+        renderOutputResults();
+        const prev = state.roundHistory[state.roundHistory.length - 2];
+        showToast(`${state.round}차 보정 완료: 일치 ${prev.matches}/${prev.total} → ${matches}/${state.validationResults.length}`, matches > prev.matches ? 'good' : 'info');
+      } catch (e) {
+        console.error(e);
+        showToast(`보정 중 오류: ${e.message}`, 'bad');
+        renderOutputResults();
+      } finally {
+        state.isAnalyzing = false;
+      }
     }
 
     // ==================== MISC ====================

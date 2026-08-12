@@ -114,6 +114,10 @@
 
     .max-score-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
     .max-score-row input { width: 110px; text-align: center; font-weight: 700; font-size: 1.05rem; }
+    .seg { display: inline-flex; background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: var(--r); padding: 3px; gap: 3px; margin-bottom: 16px; }
+    .seg-btn { padding: 9px 20px; border: none; background: transparent; border-radius: 7px; font-family: var(--font); font-size: 0.92rem; font-weight: 600; color: var(--ink-2); cursor: pointer; transition: all 0.15s; }
+    .seg-btn.active { background: var(--accent); color: #fff; box-shadow: 0 1px 4px rgba(61,86,197,0.3); }
+    .grade-select { padding: 8px 10px; border: 1px solid var(--border-strong); border-radius: var(--r); font-family: var(--font); font-size: 0.95rem; font-weight: 600; background: var(--surface); color: var(--ink); }
     .norm-note {
       flex: 1; min-width: 260px; font-size: 0.85rem; color: var(--ink-2);
       background: var(--accent-soft); border: 1px solid var(--accent-line); border-radius: var(--r); padding: 10px 14px;
@@ -268,16 +272,29 @@
     <div class="panel active" id="panel-1">
       <div class="card">
         <div class="card-head">
-          <span class="card-title">만점 설정 <span class="tag">정규화</span></span>
+          <span class="card-title">채점 방식 설정 <span class="tag">정규화</span></span>
         </div>
         <div class="card-body">
-          <div class="max-score-row">
+          <div class="seg" id="modeSeg">
+            <button type="button" class="seg-btn active" data-mode="score">점수제 (0~만점)</button>
+            <button type="button" class="seg-btn" data-mode="grade">등급제 (상·중·하)</button>
+          </div>
+          <div class="max-score-row" id="scoreModeBox">
             <div>
               <label for="maxScore" style="font-size:0.92rem; font-weight:600; display:block; margin-bottom:7px;">이 문항의 만점</label>
               <input type="number" id="maxScore" value="100" min="1" max="1000" step="0.5">
             </div>
             <div class="norm-note">
               10점, 20점, 100점 등 <b>어떤 만점이든 그대로 입력</b>하세요. 내부에서 100점 기준으로 정규화해 분석하고, 결과는 다시 원래 만점으로 환산해 보여드립니다.
+            </div>
+          </div>
+          <div class="max-score-row" id="gradeModeBox" style="display:none;">
+            <div>
+              <label for="gradeLabels" style="font-size:0.92rem; font-weight:600; display:block; margin-bottom:7px;">등급 이름 (높은 등급부터, 쉼표 구분)</label>
+              <input type="text" id="gradeLabels" value="상, 중, 하" style="width:220px; text-align:center; font-weight:700;">
+            </div>
+            <div class="norm-note">
+              문장형 루브릭의 <b>상·중·하 등급을 그대로 입력</b>하세요. A/B/C 등 다른 이름, 4~5단계도 가능합니다. 내부에서 등급 간격을 100점 척도로 정규화해 분석합니다.
             </div>
           </div>
         </div>
@@ -316,7 +333,7 @@
                 <tr>
                   <th style="width:36px;">#</th>
                   <th class="answer-col">답안 텍스트</th>
-                  <th style="width:110px;">교사 점수</th>
+                  <th style="width:110px;">교사 채점</th>
                   <th style="min-width:190px;">채점 이유 (선택 · 강력 권장)</th>
                   <th style="width:40px;"></th>
                 </tr>
@@ -468,7 +485,9 @@
   <script>
     // ==================== STATE ====================
     const state = {
+      mode: 'score',            // 'score' | 'grade'
       maxScore: 100,
+      gradeLabels: ['상', '중', '하'],  // 높은 등급부터
       rubric: '',
       answers: [],            // { id, text, score(원척도), reason }
       validationAnswers: [],
@@ -485,16 +504,34 @@
     };
 
     // ==================== 정규화 ====================
-    // 내부 분석은 전부 0~100 정규화 점수로, 표시는 원척도로.
+    // 내부 분석은 전부 0~100 정규화 점수로, 표시는 원척도(점수 또는 등급)로.
     const norm = s => Math.round(s / state.maxScore * 100);
     const denorm = n => {
       const v = n / 100 * state.maxScore;
       return Math.round(v * 10) / 10;
     };
     const fmtOrig = n => {
+      if (state.mode === 'grade') return normToGrade(n);
       const v = denorm(n);
       return (v % 1 === 0 ? v.toFixed(0) : v.toFixed(1));
     };
+    // 등급 ↔ 정규화 점수 (n등급을 100점 척도에 등간격 배치: 상=100, 중=50, 하=0)
+    const gradeToNorm = label => {
+      const i = state.gradeLabels.indexOf(label);
+      const n = state.gradeLabels.length;
+      if (i < 0 || n < 2) return 0;
+      return Math.round(100 * (n - 1 - i) / (n - 1));
+    };
+    const normToGrade = nv => {
+      const n = state.gradeLabels.length;
+      const idx = Math.round((n - 1) * (100 - nv) / 100);
+      return state.gradeLabels[Math.max(0, Math.min(n - 1, idx))];
+    };
+    const answerNorm = a => state.mode === 'grade' ? gradeToNorm(a.grade) : norm(a.score);
+    // 프롬프트에 넣는 척도 설명
+    const scaleDesc = () => state.mode === 'grade'
+      ? `등급제(${state.gradeLabels.join('/')})를 100점 척도로 환산한 값 (${state.gradeLabels.map(l => l + '=' + gradeToNorm(l)).join(', ')})`
+      : '0~100 정규화 점수';
 
     // ==================== DOM ====================
     const $ = id => document.getElementById(id);
@@ -517,12 +554,39 @@
     $('backTo3').addEventListener('click', () => goStep(3));
     $('toStep4').addEventListener('click', () => goStep(4));
 
+    // 채점 방식(점수제/등급제) 전환
+    function setMode(mode) {
+      state.mode = mode;
+      $('modeSeg').querySelectorAll('.seg-btn').forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
+      $('scoreModeBox').style.display = mode === 'score' ? 'flex' : 'none';
+      $('gradeModeBox').style.display = mode === 'grade' ? 'flex' : 'none';
+      updateScaleTag();
+      renderAnswersTable();
+    }
+    function updateScaleTag() {
+      $('scaleTag').textContent = state.mode === 'grade' ? `등급제 · ${state.gradeLabels.join('/')}` : `만점 ${state.maxScore}점`;
+    }
+    $('modeSeg').querySelectorAll('.seg-btn').forEach(b => b.addEventListener('click', () => setMode(b.dataset.mode)));
+
     // 만점 변경
     $('maxScore').addEventListener('change', () => {
       const v = parseFloat($('maxScore').value);
       if (!v || v <= 0) { $('maxScore').value = state.maxScore; return; }
       state.maxScore = v;
-      $('scaleTag').textContent = `만점 ${v}점`;
+      updateScaleTag();
+      renderAnswersTable();
+    });
+
+    // 등급 이름 변경
+    $('gradeLabels').addEventListener('change', () => {
+      const labels = $('gradeLabels').value.split(',').map(s => s.trim()).filter(Boolean);
+      if (labels.length < 2 || labels.length > 6 || new Set(labels).size !== labels.length) {
+        showToast('등급은 서로 다른 이름 2~6개를 쉼표로 구분해 입력하세요.', 'warn');
+        $('gradeLabels').value = state.gradeLabels.join(', ');
+        return;
+      }
+      state.gradeLabels = labels;
+      updateScaleTag();
       renderAnswersTable();
     });
 
@@ -556,8 +620,13 @@
         <tr data-id="${a.id}">
           <td style="font-weight:700; color:var(--ink-3);">${i + 1}</td>
           <td class="answer-col"><textarea data-f="text" rows="2">${esc(a.text)}</textarea></td>
-          <td><input type="number" data-f="score" value="${a.score}" min="0" max="${state.maxScore}" step="0.5">
-            <span class="norm-sub">/ ${state.maxScore}점</span></td>
+          <td>${state.mode === 'grade'
+            ? `<select class="grade-select" data-f="grade">
+                 <option value="" ${!a.grade ? 'selected' : ''}>선택</option>
+                 ${state.gradeLabels.map(l => `<option value="${esc(l)}" ${a.grade === l ? 'selected' : ''}>${esc(l)}</option>`).join('')}
+               </select>`
+            : `<input type="number" data-f="score" value="${a.score}" min="0" max="${state.maxScore}" step="0.5">
+               <span class="norm-sub">/ ${state.maxScore}점</span>`}</td>
           <td><textarea data-f="reason" rows="2" placeholder="왜 이 점수를 주었는지">${esc(a.reason || '')}</textarea></td>
           <td><button class="del-btn" data-del="${a.id}" aria-label="삭제">×</button></td>
         </tr>`).join('');
@@ -667,6 +736,33 @@
       }
     };
 
+    // 등급제 샘플 — 연구회 실전(음악 감상, 문장형 상중하 루브릭) 형태의 가상 데이터
+    sampleSubjects.musicGrade = {
+      name: '음악 (등급제)', mode: 'grade', gradeLabels: ['상', '중', '하'],
+      rubric: `[음악 감상 서술형 루브릭 - 등급제] - 중2 음악 감상 평가
+
+문제: 감상한 두 곡(베토벤 교향곡 3번 「영웅」 1악장, 바흐 칸타타 147번)의 음악적 특징(박자·리듬·형식·악기 편성 등)과 배경 지식(작곡가·시대·용도)을 곡별로 서술하시오.
+
+[등급 기준]
+상: 두 곡 모두 실제 곡과 맞는 구체적인 음악 요소 용어와 배경 지식을 서술함
+중: 한 곡만 정확히 서술했거나, 두 곡 모두 방향은 맞으나 내용이 빈약함
+하: 두 곡 모두 부정확하거나, 느낌·인상("웅장했다", "좋았다")만 서술함`,
+      answers: [
+        { text: "곡1은 베토벤의 영웅 교향곡으로 3/4박자이지만 당김음과 강세 이동으로 규칙성이 깨진다. 소나타 형식이고 대편성 관현악이다. 곡2는 바흐의 칸타타로 셋잇단음표 반주 위에 코랄 선율이 흐르며 바로크 시대 교회 음악이다.", grade: "상", reason: "두 곡 모두 요소 용어와 배경이 구체적이고 정확" },
+        { text: "곡1은 베토벤이 나폴레옹을 생각하며 쓴 교향곡이고 고전에서 낭만으로 넘어가는 시기다. 곡2는 바흐의 교회 음악이고 예배 때 쓰였다. 둘 다 관현악이 나온다.", grade: "상", reason: "식별 정보(작곡가·시대·용도)가 두 곡 모두 정확. 요소 용어가 다소 부족하지만 배경 지식이 충실해 상 처리" },
+        { text: "곡1은 엇박이 많고 웅장한 느낌의 교향곡이다. 곡2는 바흐가 작곡한 칸타타로 셋잇단음표가 반복되는 교회 음악이다.", grade: "중", reason: "곡2는 정확(1), 곡1은 엇박 하나 외에 인상 위주(0.5) — 1.5로 중" },
+        { text: "곡1은 베토벤의 영웅이다. 곡2는 종교에서 부르는 노래로 예상된다.", grade: "중", reason: "곡1 식별 정보 맞음(0.5, 내용 빈약), 곡2 추측성 서술(0) — 절반 처리로 중" },
+        { text: "두 곡 다 클래식이고 옛날 음악이다. 첫 곡은 소리가 커졌다 작아졌다 하고 두 번째 곡은 잔잔하다.", grade: "하", reason: "두 곡 모두 인상·느낌만 서술, 요소 용어·식별 정보 없음" },
+        { text: "곡1은 모차르트의 교향곡으로 낭만주의 음악이다. 곡2는 헨델의 오라토리오다.", grade: "하", reason: "두 곡 모두 핵심 사실(작곡가) 오류" },
+        { text: "곡1은 베토벤 교향곡 3번으로 스포르찬도와 당김음이 특징이고 소나타 형식이다. 곡2는 교회 음악 같다.", grade: "중", reason: "곡1 정확(1), 곡2 장르 한 마디뿐(0) — 1로 중" },
+        { text: "곡1은 3박자인데 엇박 때문에 박자가 헷갈리고, 관현악 규모가 크다. 베토벤이 나폴레옹에게 바치려다 철회한 곡이다. 곡2는 바흐의 칸타타 147번으로 규칙적인 반주 위에 합창 선율이 얹히는 바로크 교회 음악이다.", grade: "상", reason: "두 곡 모두 요소·배경 정확하고 구체적" },
+        { text: "곡1은 교향곡이고 엇박자다. 도약진행을 한다.", grade: "하", reason: "곡2 무응답, 곡1은 한 문장 파편 서술 — 맞는 단어가 스쳐도 파편은 0 처리" },
+        { text: "곡1은 베토벤의 영웅으로 고전주의 시대 곡이며 웅장하다. 곡2는 바흐의 곡으로 바로크 시대이고 셋잇단음표가 계속 나온다. 교회에서 썼다.", grade: "상", reason: "곡1 식별 정보 정확(1), 곡2 요소·배경 정확(1) — 일부 인상 표현이 섞였지만 맞은 내용이 훨씬 많아 오류 관대 적용" },
+        { text: "곡1은 낭만주의 종교 음악으로 베토벤이 작곡했다. 곡2는 바흐 곡이다.", grade: "하", reason: "곡1 맞은 정보와 오류가 비슷한 비율의 짧은 답(0), 곡2 작곡가만(0.5 안 됨, 빈약) — 하 처리" },
+        { text: "곡1은 베토벤 영웅, 3/4박자에 당김음으로 규칙이 깨진다. 곡2는 바흐 칸타타, 셋잇단음표 반주와 코랄이 나오고 예배용이다. 다만 곡1은 바로크 시대다.", grade: "중", reason: "두 곡 모두 요소는 정확하나 곡1 시대 오류가 커서 곡1 절반 처리 — 1.5로 중" }
+      ]
+    };
+
     let curSubject = 'math';
     function renderSubjectBtns() {
       $('subjectBtns').innerHTML = Object.keys(sampleSubjects).map(k =>
@@ -676,8 +772,9 @@
     }
     function renderSamplePreview() {
       const d = sampleSubjects[curSubject];
-      let p = `=== 루브릭 (만점 ${d.maxScore}점) ===\n${d.rubric}\n\n=== 답안 ${d.answers.length}개 ===\n`;
-      d.answers.forEach((a, i) => { p += `\n[답안 ${i + 1}] 점수: ${a.score}\n${a.text}\n이유: ${a.reason}\n`; });
+      const head = d.mode === 'grade' ? `등급제 ${d.gradeLabels.join('/')}` : `만점 ${d.maxScore}점`;
+      let p = `=== 루브릭 (${head}) ===\n${d.rubric}\n\n=== 답안 ${d.answers.length}개 ===\n`;
+      d.answers.forEach((a, i) => { p += `\n[답안 ${i + 1}] ${d.mode === 'grade' ? '등급: ' + a.grade : '점수: ' + a.score}\n${a.text}\n이유: ${a.reason}\n`; });
       $('samplePreview').textContent = p;
     }
     $('sampleBtn').addEventListener('click', () => { renderSubjectBtns(); renderSamplePreview(); $('sampleModal').classList.add('visible'); });
@@ -687,8 +784,14 @@
     $('sampleApply').addEventListener('click', () => {
       const d = sampleSubjects[curSubject];
       state.rubric = d.rubric; $('rubric').value = d.rubric;
-      state.maxScore = d.maxScore; $('maxScore').value = d.maxScore;
-      $('scaleTag').textContent = `만점 ${d.maxScore}점`;
+      if (d.mode === 'grade') {
+        state.gradeLabels = [...d.gradeLabels];
+        $('gradeLabels').value = state.gradeLabels.join(', ');
+        setMode('grade');
+      } else {
+        state.maxScore = d.maxScore; $('maxScore').value = d.maxScore;
+        setMode('score');
+      }
       state.answers = d.answers.map(a => ({ ...a, id: uid() }));
       renderAnswersTable();
       $('sampleModal').classList.remove('visible');
@@ -761,6 +864,22 @@
       }
     }
 
+    // 등급 응답 해석: 라벨 정합 → 부분 일치 → 1회 재요청 순으로 복원
+    async function parseGradeResult(obj, prompt, systemPrompt) {
+      let g = String(obj.grade ?? '').trim();
+      if (!state.gradeLabels.includes(g)) {
+        const found = state.gradeLabels.find(l => g.includes(l));
+        if (found) g = found;
+        else {
+          const retry = await callJSONObject(prompt, systemPrompt, 0.1);
+          const rg = String(retry.grade ?? '').trim();
+          g = state.gradeLabels.find(l => rg === l || rg.includes(l));
+          if (!g) throw new Error(`AI가 유효하지 않은 등급을 반환했습니다: ${rg}`);
+        }
+      }
+      return gradeToNorm(g);
+    }
+
     // 단일 객체 기대 호출 (배열로 오면 첫 요소 사용, 실패 시 1회 재시도)
     async function callJSONObject(prompt, systemPrompt, temperature, tries = 2) {
       let lastErr;
@@ -778,7 +897,9 @@
     // ==================== PIPELINE ====================
     const clamp100 = v => Math.max(0, Math.min(100, Math.round(v)));
     const scoreToBand = s => s >= 90 ? 'A' : s >= 80 ? 'B' : s >= 70 ? 'C' : s >= 60 ? 'D' : 'F';
-    const bandsMatch = (a, b) => scoreToBand(a) === scoreToBand(b) || Math.abs(a - b) <= 10;
+    const bandsMatch = (a, b) => state.mode === 'grade'
+      ? normToGrade(a) === normToGrade(b)
+      : (scoreToBand(a) === scoreToBand(b) || Math.abs(a - b) <= 10);
 
     async function runAnalysis() {
       if (state.isAnalyzing) return;
@@ -786,16 +907,23 @@
       const alertEl = $('analysisAlert');
 
       if (!state.rubric.trim()) { showToast('루브릭을 입력해주세요. (1단계)', 'warn'); goStep(1); return; }
-      const valid = state.answers.filter(a => a.text.trim() && a.score >= 0 && a.score <= state.maxScore);
-      const outOfRange = state.answers.filter(a => a.text.trim() && (a.score < 0 || a.score > state.maxScore));
-      if (outOfRange.length) { showToast(`만점(${state.maxScore}점)을 벗어난 점수가 ${outOfRange.length}개 있습니다. 수정해주세요.`, 'bad'); return; }
+      let valid;
+      if (state.mode === 'grade') {
+        valid = state.answers.filter(a => a.text.trim() && state.gradeLabels.includes(a.grade));
+        const noGrade = state.answers.filter(a => a.text.trim() && !state.gradeLabels.includes(a.grade));
+        if (noGrade.length) { showToast(`등급이 선택되지 않은 답안이 ${noGrade.length}개 있습니다.`, 'bad'); return; }
+      } else {
+        valid = state.answers.filter(a => a.text.trim() && a.score >= 0 && a.score <= state.maxScore);
+        const outOfRange = state.answers.filter(a => a.text.trim() && (a.score < 0 || a.score > state.maxScore));
+        if (outOfRange.length) { showToast(`만점(${state.maxScore}점)을 벗어난 점수가 ${outOfRange.length}개 있습니다. 수정해주세요.`, 'bad'); return; }
+      }
       if (valid.length < 7) { showToast('최소 7개 이상의 유효한 답안이 필요합니다.', 'warn'); return; }
       if (valid.length > 20) showToast('답안은 최대 20개까지만 분석에 사용됩니다.', 'warn');
 
       const hasReasons = valid.some(a => a.reason && a.reason.trim());
 
       // 정규화된 사본 생성
-      const normalized = valid.slice(0, 20).map(a => ({ ...a, normScore: norm(a.score) }));
+      const normalized = valid.slice(0, 20).map(a => ({ ...a, normScore: answerNorm(a) }));
       const nScores = normalized.map(a => a.normScore);
       const spread = Math.max(...nScores) - Math.min(...nScores);
 
@@ -853,7 +981,10 @@
         const tMean = state.analysisAnswers.reduce((s, a) => s + a.normScore, 0) / state.analysisAnswers.length;
         state.overallOffset = Math.round(tMean - aiMean);
         if (state.overallOffset !== 0) {
-          state.tendencies.push(`이 교사는 루브릭 기계 채점 대비 전반적으로 ${Math.abs(state.overallOffset)}점(100점 정규화 기준) 정도 ${state.overallOffset < 0 ? '엄격하게' : '관대하게'} 채점하는 경향이 있다`);
+          const offsetDesc = state.mode === 'grade'
+            ? `약 ${(Math.abs(state.overallOffset) / (100 / (state.gradeLabels.length - 1))).toFixed(1)}등급`
+            : `${Math.abs(state.overallOffset)}점(100점 정규화 기준)`;
+          state.tendencies.push(`이 교사는 루브릭 기계 채점 대비 전반적으로 ${offsetDesc} 정도 ${state.overallOffset < 0 ? '엄격하게' : '관대하게'} 채점하는 경향이 있다`);
         }
         state.comparisonData = state.analysisAnswers.map((a, i) => ({
           answer: a, teacherNorm: a.normScore, aiNorm: aiScores[i], diff: aiScores[i] - a.normScore
@@ -911,7 +1042,19 @@
 
     // 답안 1개당 호출 1건 병렬 처리 — 개수 불일치 원천 차단
     async function gradeWithRubricOnly(rubric, answers, onEach) {
-      const systemPrompt = `당신은 엄격한 교과 교사입니다. 주어진 루브릭만을 기준으로 학생 답안 1개를 채점하세요.
+      const isGrade = state.mode === 'grade';
+      const systemPrompt = isGrade
+        ? `당신은 엄격한 교과 교사입니다. 주어진 루브릭만을 기준으로 학생 답안 1개를 등급으로 평가하세요.
+등급은 높은 순서대로 ${state.gradeLabels.join(' > ')} 입니다.
+
+[채점 방법 - 반드시 준수]
+1. 루브릭의 등급별 서술 기준을 정확히 분해하세요.
+2. 답안이 어느 등급 기준을 충족하는지 근거를 들어 판정하세요.
+3. 느낌·인상만 있는 서술과 구체적 근거가 있는 서술을 구분하세요.
+4. 애매하면 루브릭 문구에 더 가까운 쪽 등급을 선택하세요.
+
+출력: JSON 객체 하나만. {"grade": "${state.gradeLabels.join('|')} 중 하나", "reason": "등급 판정 근거"}`
+        : `당신은 엄격한 교과 교사입니다. 주어진 루브릭만을 기준으로 학생 답안 1개를 채점하세요.
 점수는 0~100 정규화 척도입니다.
 
 [채점 방법 - 반드시 준수]
@@ -923,9 +1066,10 @@
 출력: JSON 객체 하나만. {"score": 정수, "reason": "항목별 배점 근거"}`;
       let done = 0;
       return Promise.all(answers.map(async a => {
-        const prompt = `[루브릭]\n${rubric}\n\n[학생 답안]\n${a.text}\n\n이 답안을 루브릭 항목별 배점대로 채점해 JSON 객체 하나로만 응답하세요.`;
+        const prompt = `[루브릭]\n${rubric}\n\n[학생 답안]\n${a.text}\n\n이 답안을 루브릭 기준대로 ${isGrade ? '등급 판정해' : '채점해'} JSON 객체 하나로만 응답하세요.`;
         const obj = await callJSONObject(prompt, systemPrompt, 0.1);
         if (onEach) onEach(++done, answers.length);
+        if (isGrade) return parseGradeResult(obj, prompt, systemPrompt);
         return clamp100(Number(obj.score));
       }));
     }
@@ -940,7 +1084,7 @@
         else bonusCases.push(item);
       });
 
-      const systemPrompt = `당신은 채점 분석 전문가입니다. 교사가 루브릭 대비 어떤 점에서 가점/감점하는지 분석하세요. 점수는 전부 0~100 정규화 척도입니다.
+      const systemPrompt = `당신은 채점 분석 전문가입니다. 교사가 루브릭 대비 어떤 점에서 가점/감점하는지 분석하세요. 점수는 전부 ${scaleDesc()}입니다.
 
 [분석 절차 - 내부 추론 후 결과만 출력]
 1. 답안별로 교사가 루브릭 대비 어디에 가점/감점했는지 분석 (교사 이유·diff 근거)
@@ -975,9 +1119,11 @@
       const calibText = state.calibration.length
         ? state.calibration.map((c, i) => `${i + 1}. [${c.방향}] ${c.성향} — 평균 ${c.평균점수범위}점 (조건: ${c.적용조건})`).join('\n')
         : '(양적 보정값 없음)';
-      const scaleNote = state.maxScore !== 100
-        ? `\n\n[중요 - 점수 척도] 이 시험의 실제 만점은 ${state.maxScore}점입니다. 아래 분석 수치는 100점 정규화 기준이므로, 안내문 마지막에 "정규화 점수 × ${state.maxScore}/100 = 실제 점수" 환산 규칙을 별도 섹션으로 명시하세요.`
-        : '';
+      const scaleNote = state.mode === 'grade'
+        ? `\n\n[중요 - 채점 척도] 이 평가는 등급제(${state.gradeLabels.join('/')})입니다. 분석 수치는 등급을 100점 척도로 환산한 값(${state.gradeLabels.map(l => l + '=' + gradeToNorm(l)).join(', ')})이므로, 안내문에서는 점수가 아니라 등급 판정 기준(어떤 경우 등급을 올리고 내리는지)으로 서술하세요.`
+        : (state.maxScore !== 100
+          ? `\n\n[중요 - 점수 척도] 이 시험의 실제 만점은 ${state.maxScore}점입니다. 아래 분석 수치는 100점 정규화 기준이므로, 안내문 마지막에 "정규화 점수 × ${state.maxScore}/100 = 실제 점수" 환산 규칙을 별도 섹션으로 명시하세요.`
+          : '');
       const systemPrompt = `당신은 채점 안내문 작성 전문가입니다. 기존 루브릭에 교사의 채점 성향을 반영한 완성된 채점 안내문을 작성하세요.
 구성: 1) 기존 루브릭(원문 유지) 2) 교사 채점 성향 분석 결과(각 성향에 양적 보정값 명시) 3) 종합 채점 가이드라인(보정값 기반 실용 지침)
 전문적이고 격식 있는 문체로 쓰되, 반드시 일반 텍스트로만 작성하세요. 마크다운 기호(#, *, |, 표, 코드블록)를 절대 쓰지 말고 「1. / 1-1. / -」 같은 번호와 들여쓰기로만 구조화하세요. 이 문서는 복사해서 그대로 인쇄·배부됩니다.`;
@@ -990,7 +1136,24 @@
       const calibText = state.calibration.length
         ? state.calibration.map((c, i) => `${i + 1}. [${c.방향}] ${c.성향} → 평균 ${c.평균점수범위}점 (조건: ${c.적용조건})`).join('\n')
         : '(없음)';
-      const systemPrompt = `당신은 특정 교사의 채점 행동을 정확히 모델링하는 전문가입니다. 점수는 0~100 정규화 척도입니다.
+      const isGrade = state.mode === 'grade';
+      const systemPrompt = isGrade
+        ? `당신은 특정 교사의 채점 행동을 정확히 모델링하는 전문가입니다. 등급은 높은 순서대로 ${state.gradeLabels.join(' > ')} 입니다.
+
+답안에 [루브릭만 판정한 기준등급]이 주어집니다. 이 교사의 성향(보정표)이 답안에 해당하면 기준등급에서 등급을 올리거나 내려서, 이 교사의 최종 등급을 예측하세요.
+
+[예측 방법]
+1. 기준등급에서 시작.
+2. 보정표의 감점 성향 조건에 해당하면 등급을 내리고, 가점 성향 조건에 해당하면 올린다.
+3. 전체 엄격성 오프셋(교사가 루브릭보다 엄격/관대)도 반영한다.
+4. 해당하는 성향이 없으면 기준등급을 유지한다.
+
+[양적 보정표 — 점수는 ${scaleDesc()}]\n${calibText}
+
+[전체 엄격성 오프셋] 평균 ${state.overallOffset > 0 ? '+' : ''}${state.overallOffset}점 (환산 척도 기준)
+
+출력: JSON 객체 하나만 {"grade": "${state.gradeLabels.join('|')} 중 하나", "reason": "기준등급 → 적용한 성향 → 최종 등급"}`
+        : `당신은 특정 교사의 채점 행동을 정확히 모델링하는 전문가입니다. 점수는 0~100 정규화 척도입니다.
 
 각 답안에 [루브릭만 채점한 기준점수]가 주어집니다. 기준점수에서 반드시 수치적으로 가감해 이 교사의 최종 점수를 예측하세요.
 
@@ -1013,12 +1176,13 @@
       const total = va.length * ENSEMBLE;
       // 답안 1개 × 앙상블 1회 = 호출 1건, 전부 병렬 → 답안별 중앙값
       const perAnswer = await Promise.all(va.map(async (a, i) => {
-        const prompt = `[최종 채점 안내문]\n${state.finalDocument}\n\n[답안]\n${a.text}\n\n[루브릭만 채점한 기준점수]\n${rubricOnlyScores[i]}점\n\n이 답안에 대한 이 교사의 예상 점수를 보정표 기반으로 예측해 JSON 객체 하나로만 응답하세요.`;
+        const baseline = isGrade ? `[루브릭만 판정한 기준등급]\n${normToGrade(rubricOnlyScores[i])}` : `[루브릭만 채점한 기준점수]\n${rubricOnlyScores[i]}점`;
+        const prompt = `[최종 채점 안내문]\n${state.finalDocument}\n\n[답안]\n${a.text}\n\n${baseline}\n\n이 답안에 대한 이 교사의 예상 ${isGrade ? '등급' : '점수'}을(를) 보정표 기반으로 예측해 JSON 객체 하나로만 응답하세요.`;
         const vals = await Promise.all(Array.from({ length: ENSEMBLE }, async () => {
           try {
             const obj = await callJSONObject(prompt, systemPrompt, 0.7);
             progress.note(5, `${++done}/${total} 예측 완료`);
-            return clamp100(Number(obj.score));
+            return isGrade ? await parseGradeResult(obj, prompt, systemPrompt) : clamp100(Number(obj.score));
           } catch (e) { progress.note(5, `${++done}/${total} 예측 완료`); return NaN; }
         }));
         const ok = vals.filter(v => Number.isFinite(v));
@@ -1032,7 +1196,7 @@
     async function diagnoseMismatches() {
       const mism = state.validationResults.filter(v => !v.tendencyMatch);
       if (!mism.length) return [];
-      const systemPrompt = `당신은 AI 채점 시스템 감사관입니다. 「교사 실제 점수」와 「성향 반영 AI 예측」이 크게 어긋난 사례의 원인을 진단하세요. 점수는 0~100 정규화 척도입니다.
+      const systemPrompt = `당신은 AI 채점 시스템 감사관입니다. 「교사 실제 점수」와 「성향 반영 AI 예측」이 크게 어긋난 사례의 원인을 진단하세요. 점수는 ${scaleDesc()}입니다.
 
 각 사례에 대해 원인 유형을 하나 고르세요:
 - "SYSTEM_MISS": 성향 분석이 이 답안에 적용될 감점/가점 요인을 포착하지 못함 (시스템 한계)
@@ -1056,15 +1220,31 @@
 
     // ==================== RENDER ====================
     function scorePair(normVal) {
+      if (state.mode === 'grade') return esc(normToGrade(normVal));
       const sub = state.maxScore !== 100 ? `<span class="norm-sub">정규화 ${normVal}</span>` : '';
       return `${fmtOrig(normVal)}<span style="font-weight:500; opacity:0.7;">/${state.maxScore % 1 === 0 ? state.maxScore : state.maxScore.toFixed(1)}</span>${sub}`;
+    }
+    // 차이 배지: 점수제는 원척도 점수차, 등급제는 등급 단위 차이
+    function diffBadge(diff) {
+      if (state.mode === 'grade') {
+        const step = 100 / (state.gradeLabels.length - 1);
+        const lv = Math.round(diff / step);
+        const cls = lv === 0 ? 'd-sm' : Math.abs(lv) === 1 ? 'd-md' : 'd-lg';
+        return `<span class="score-badge ${cls}">${lv === 0 ? '일치' : (lv > 0 ? '+' : '') + lv + '등급'}</span>`;
+      }
+      const a = Math.abs(diff);
+      const cls = a >= 20 ? 'd-lg' : a >= 10 ? 'd-md' : 'd-sm';
+      const v = denorm(Math.abs(diff)) * (diff < 0 ? -1 : 1);
+      return `<span class="score-badge ${cls}">${diff > 0 ? '+' : ''}${v % 1 === 0 ? v : v.toFixed(1)}</span>`;
     }
 
     function renderAnalysisResults() {
       // 정규화 안내
-      $('normInfoAlert').innerHTML = state.maxScore !== 100
-        ? `<div class="alert alert-info">이 시험의 만점은 <b>${state.maxScore}점</b>입니다. 분석은 100점 정규화 기준으로 수행되었고, 표의 점수는 원래 만점으로 환산해 표시합니다.</div>`
-        : '';
+      $('normInfoAlert').innerHTML = state.mode === 'grade'
+        ? `<div class="alert alert-info">등급제(<b>${state.gradeLabels.join('/')}</b>) 분석입니다. 내부적으로 등급을 100점 척도(${state.gradeLabels.map(l => l + '=' + gradeToNorm(l)).join(', ')})로 정규화해 분석했고, 표에는 등급으로 표시합니다.</div>`
+        : (state.maxScore !== 100
+          ? `<div class="alert alert-info">이 시험의 만점은 <b>${state.maxScore}점</b>입니다. 분석은 100점 정규화 기준으로 수행되었고, 표의 점수는 원래 만점으로 환산해 표시합니다.</div>`
+          : '');
 
       $('tendencyList').innerHTML = state.tendencies.length
         ? state.tendencies.map((t, i) => {
@@ -1077,17 +1257,13 @@
         : '<li class="tendency-item"><span class="t-icon flat">•</span><span class="t-text">추출된 성향이 없습니다.</span></li>';
 
       $('comparisonBody').innerHTML = state.comparisonData.length
-        ? state.comparisonData.map((d, i) => {
-            const a = Math.abs(d.diff);
-            const cls = a >= 20 ? 'd-lg' : a >= 10 ? 'd-md' : 'd-sm';
-            return `<tr>
+        ? state.comparisonData.map((d, i) => `<tr>
               <td style="font-weight:700; color:var(--ink-3);">${i + 1}</td>
               <td class="answer-col" style="font-size:0.87rem;">${esc(truncate(d.answer.text, 80))}</td>
               <td class="center"><span class="score-badge teacher">${scorePair(d.teacherNorm)}</span></td>
               <td class="center"><span class="score-badge ai">${scorePair(d.aiNorm)}</span></td>
-              <td class="center"><span class="score-badge ${cls}">${d.diff > 0 ? '+' : ''}${fmtOrig(Math.abs(d.diff)) * (d.diff < 0 ? -1 : 1)}</span></td>
-            </tr>`;
-          }).join('')
+              <td class="center">${diffBadge(d.diff)}</td>
+            </tr>`).join('')
         : '<tr class="empty-row"><td colspan="5">비교 데이터가 없습니다.</td></tr>';
     }
 

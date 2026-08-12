@@ -377,7 +377,10 @@
 
       <div id="resultsArea" style="display:none;">
         <div class="card">
-          <div class="card-head"><span class="card-title">채점 성향 요약</span></div>
+          <div class="card-head">
+            <span class="card-title">채점 성향 요약</span>
+            <button class="btn btn-ghost btn-sm" id="editTendencyBtn" type="button">성향 편집</button>
+          </div>
           <div class="card-body">
             <div id="normInfoAlert"></div>
             <ul class="tendency-list" id="tendencyList"></ul>
@@ -1424,6 +1427,92 @@
       return `<span class="score-badge ${cls}">${diff > 0 ? '+' : ''}${v % 1 === 0 ? v : v.toFixed(1)}</span>`;
     }
 
+    // ==================== 성향 편집 ====================
+    let editingTendency = false;
+    let tendencyBackup = [];
+    function commitTendencyTextareas() {
+      $('tendencyList').querySelectorAll('textarea[data-ti]').forEach(ta => { state.tendencies[+ta.dataset.ti] = ta.value; });
+    }
+    function renderTendencyList() {
+      const el = $('tendencyList');
+      if (editingTendency) {
+        el.innerHTML = state.tendencies.map((t, i) => `
+          <li class="tendency-item" style="align-items:center;">
+            <span class="t-icon flat">${i + 1}</span>
+            <textarea data-ti="${i}" rows="2" style="flex:1; min-height:0; padding:8px 10px; font-size:0.92rem; border:1px solid var(--border-strong); border-radius:var(--r); font-family:var(--font);">${esc(t)}</textarea>
+            <button class="del-btn" data-tdel="${i}" aria-label="삭제">×</button>
+          </li>`).join('') +
+          `<li style="list-style:none; margin-top:10px; display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+            <button class="btn btn-ghost btn-sm" id="addTendencyBtn" type="button">+ 성향 추가</button>
+            <span style="flex:1;"></span>
+            <button class="btn btn-primary btn-sm" id="saveTendencyBtn" type="button">저장하고 안내문·검증 다시 만들기</button>
+          </li>`;
+        el.querySelectorAll('textarea[data-ti]').forEach(ta => ta.addEventListener('change', e => { state.tendencies[+e.target.dataset.ti] = e.target.value; }));
+        el.querySelectorAll('[data-tdel]').forEach(b => b.addEventListener('click', e => {
+          commitTendencyTextareas();
+          state.tendencies.splice(+e.currentTarget.dataset.tdel, 1);
+          renderTendencyList();
+        }));
+        $('addTendencyBtn').addEventListener('click', () => { commitTendencyTextareas(); state.tendencies.push(''); renderTendencyList(); });
+        $('saveTendencyBtn').addEventListener('click', saveTendencyEdits);
+      } else {
+        el.innerHTML = state.tendencies.length
+          ? state.tendencies.map((t, i) => {
+              const up = /가점|관대|후하|높이|더 준다/.test(t);
+              const down = /감점|엄격|박하|낮게|깎/.test(t);
+              const cls = up ? 'up' : down ? 'down' : 'flat';
+              const ch = up ? '▲' : down ? '▼' : '•';
+              return `<li class="tendency-item"><span class="t-icon ${cls}">${ch}</span><span class="t-text"><b>${i + 1}.</b> ${esc(t)}</span></li>`;
+            }).join('')
+          : '<li class="tendency-item"><span class="t-icon flat">•</span><span class="t-text">추출된 성향이 없습니다.</span></li>';
+      }
+    }
+    function toggleTendencyEdit() {
+      if (state.isAnalyzing) return;
+      if (!editingTendency) {
+        editingTendency = true;
+        tendencyBackup = state.tendencies.slice();
+        $('editTendencyBtn').textContent = '편집 취소';
+      } else {
+        editingTendency = false;
+        state.tendencies = tendencyBackup.slice();  // 취소 = 원복
+        $('editTendencyBtn').textContent = '성향 편집';
+      }
+      renderTendencyList();
+    }
+    async function saveTendencyEdits() {
+      commitTendencyTextareas();
+      state.tendencies = state.tendencies.map(t => t.trim()).filter(Boolean);
+      if (!state.tendencies.length) { showToast('성향을 최소 1개는 남겨주세요.', 'warn'); state.tendencies = tendencyBackup.slice(); renderTendencyList(); return; }
+      editingTendency = false;
+      $('editTendencyBtn').textContent = '성향 편집';
+      $('editTendencyBtn').disabled = true;
+      renderTendencyList();
+      state.isAnalyzing = true;
+      showToast('수정한 성향으로 안내문과 검증을 다시 만드는 중입니다...', 'info');
+      try {
+        state.finalDocument = await generateFinalDocument();
+        const tendencyScores = await predictWithTendency(state.validationRubricOnly);
+        state.validationResults = state.validationAnswers.map((a, i) => ({
+          answer: a, teacherNorm: a.normScore, rubricNorm: state.validationRubricOnly[i], tendencyNorm: tendencyScores[i],
+          rubricMatch: bandsMatch(state.validationRubricOnly[i], a.normScore),
+          tendencyMatch: bandsMatch(tendencyScores[i], a.normScore)
+        }));
+        state.diagnoses = await diagnoseMismatches();
+        const matches = state.validationResults.filter(v => v.tendencyMatch).length;
+        if (state.roundHistory.length) state.roundHistory[state.roundHistory.length - 1] = { round: state.round, matches, total: state.validationResults.length, edited: true };
+        renderOutputResults();
+        showToast(`반영 완료: 검증 일치 ${matches}/${state.validationResults.length}`, 'good');
+      } catch (e) {
+        console.error(e);
+        showToast('반영 중 오류: ' + e.message, 'bad');
+      } finally {
+        state.isAnalyzing = false;
+        $('editTendencyBtn').disabled = false;
+      }
+    }
+    $('editTendencyBtn').addEventListener('click', toggleTendencyEdit);
+
     function renderAnalysisResults() {
       // 정규화 안내
       const scAlert = state.selfConsistency !== null
@@ -1435,15 +1524,7 @@
           ? `<div class="alert alert-info">이 시험의 만점은 <b>${state.maxScore}점</b>입니다. 분석은 100점 정규화 기준으로 수행되었고, 표의 점수는 원래 만점으로 환산해 표시합니다.</div>`
           : ''));
 
-      $('tendencyList').innerHTML = state.tendencies.length
-        ? state.tendencies.map((t, i) => {
-            const up = /가점|관대|후하|높이|더 준다/.test(t);
-            const down = /감점|엄격|박하|낮게|깎/.test(t);
-            const cls = up ? 'up' : down ? 'down' : 'flat';
-            const ch = up ? '▲' : down ? '▼' : '•';
-            return `<li class="tendency-item"><span class="t-icon ${cls}">${ch}</span><span class="t-text"><b>${i + 1}.</b> ${esc(t)}</span></li>`;
-          }).join('')
-        : '<li class="tendency-item"><span class="t-icon flat">•</span><span class="t-text">추출된 성향이 없습니다.</span></li>';
+      renderTendencyList();
 
       $('comparisonBody').innerHTML = state.comparisonData.length
         ? state.comparisonData.map((d, i) => `<tr>
@@ -1489,7 +1570,7 @@
       if (!state.validationResults.length) { diagCard.style.display = 'none'; return; }
       diagCard.style.display = 'block';
       const historyLine = state.roundHistory.length > 1
-        ? `<div class="alert alert-info">보정 이력: ${state.roundHistory.map(h => `${h.round}차 ${h.matches}/${h.total} 일치`).join(' → ')}</div>`
+        ? `<div class="alert alert-info">보정 이력: ${state.roundHistory.map(h => `${h.round}차${h.edited ? '(편집)' : ''} ${h.matches}/${h.total} 일치`).join(' → ')}</div>`
         : '';
       if (mismCount === 0) {
         const n = state.validationResults.length;

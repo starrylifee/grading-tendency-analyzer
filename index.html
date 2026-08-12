@@ -677,6 +677,7 @@
             const n = parseFloat(raw);
             ans.score = raw === '' || !Number.isFinite(n) ? null : n;  // 빈 칸/오입력은 null (0점 아님)
           } else ans[f] = e.target.value;
+          scheduleSave();
         });
       });
       answersBody.querySelectorAll('[data-del]').forEach(b => {
@@ -1673,10 +1674,73 @@ ${outFormat}`;
       b.textContent = '복사됨 ✓';
       setTimeout(() => { b.textContent = t; }, 2000);
     });
-    $('rubric').addEventListener('input', () => { state.rubric = $('rubric').value; });
+    $('rubric').addEventListener('input', () => { state.rubric = $('rubric').value; scheduleSave(); });
+
+    // ==================== 자동 저장·복원 ====================
+    const DRAFT_KEY = 'grading_draft_v1';
+    let saveTimer = null;
+    function hasContent() {
+      return (state.rubric && state.rubric.trim()) || state.answers.some(a => a.text && a.text.trim());
+    }
+    function saveDraft() {
+      try {
+        if (!hasContent()) { localStorage.removeItem(DRAFT_KEY); return; }
+        localStorage.setItem(DRAFT_KEY, JSON.stringify({
+          v: 1, savedAt: Date.now(), mode: state.mode, maxScore: state.maxScore,
+          gradeLabels: state.gradeLabels, rubric: state.rubric, answers: state.answers
+        }));
+      } catch (e) { /* 용량 초과 등은 무시 */ }
+    }
+    function scheduleSave() { clearTimeout(saveTimer); saveTimer = setTimeout(saveDraft, 600); }
+
+    function restoreDraft(d) {
+      state.mode = d.mode === 'grade' ? 'grade' : 'score';
+      state.maxScore = Number(d.maxScore) > 0 ? Number(d.maxScore) : 100;
+      state.gradeLabels = Array.isArray(d.gradeLabels) && d.gradeLabels.length >= 2 ? d.gradeLabels : ['상', '중', '하'];
+      state.rubric = typeof d.rubric === 'string' ? d.rubric : '';
+      state.answers = Array.isArray(d.answers) ? d.answers.map(a => ({
+        id: uid(), text: String(a.text || ''), reason: String(a.reason || ''),
+        ...(state.mode === 'grade' ? { grade: a.grade || '' } : { score: Number.isFinite(a.score) ? a.score : null })
+      })) : [];
+      $('rubric').value = state.rubric;
+      $('maxScore').value = state.maxScore;
+      $('gradeLabels').value = state.gradeLabels.join(', ');
+      setMode(state.mode);  // updateScaleTag + renderAnswersTable 포함
+      if (!state.answers.length) addAnswerRow();
+    }
+
+    function offerRestore(d) {
+      const when = (() => { try { const m = Math.round((Date.now() - d.savedAt) / 60000); return m < 1 ? '방금 전' : m < 60 ? `${m}분 전` : `${Math.round(m / 60)}시간 전`; } catch (e) { return '이전'; } })();
+      const cnt = Array.isArray(d.answers) ? d.answers.filter(a => a.text && a.text.trim()).length : 0;
+      const bar = document.createElement('div');
+      bar.className = 'alert alert-info';
+      bar.style.cssText = 'margin:0 0 18px; display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;';
+      bar.innerHTML = `<span>${when} 작업하던 입력이 있습니다 (답안 ${cnt}개). 이어서 하시겠어요?</span>
+        <span style="display:flex; gap:8px;"><button class="btn btn-primary btn-sm" id="draftRestore">이어서 하기</button><button class="btn btn-ghost btn-sm" id="draftDiscard">새로 시작</button></span>`;
+      const panel = $('panel-1');
+      panel.insertBefore(bar, panel.firstChild);
+      $('draftRestore').addEventListener('click', () => { restoreDraft(d); bar.remove(); showToast('이전 입력을 불러왔습니다.', 'good'); });
+      $('draftDiscard').addEventListener('click', () => { localStorage.removeItem(DRAFT_KEY); bar.remove(); });
+    }
+
+    // 답안 표 변경 시마다 저장 (렌더 = 추가/삭제/붙여넣기/샘플 이후 호출됨)
+    const _renderAnswersTable = renderAnswersTable;
+    renderAnswersTable = function () { _renderAnswersTable(); scheduleSave(); };
+
+    // 분석 중이거나 입력이 남아 있으면 이탈 경고
+    window.addEventListener('beforeunload', e => {
+      if (state.isAnalyzing || hasContent()) { e.preventDefault(); e.returnValue = ''; }
+    });
 
     // init
-    addAnswerRow();
+    let draft = null;
+    try { draft = JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null'); } catch (e) { draft = null; }
+    if (draft && ((draft.rubric && draft.rubric.trim()) || (Array.isArray(draft.answers) && draft.answers.some(a => a.text && a.text.trim())))) {
+      addAnswerRow();
+      offerRestore(draft);
+    } else {
+      addAnswerRow();
+    }
     $('rubric').focus();
   </script>
 </body>

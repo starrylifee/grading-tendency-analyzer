@@ -905,10 +905,11 @@
 
     // ==================== PIPELINE ====================
     const clamp100 = v => Math.max(0, Math.min(100, Math.round(v)));
-    const scoreToBand = s => s >= 90 ? 'A' : s >= 80 ? 'B' : s >= 70 ? 'C' : s >= 60 ? 'D' : 'F';
+    // 일치 판정: 등급제는 등급 완전 일치, 점수제는 ±10점(정규화 기준) 단일 기준
+    // (A~F 등급 병행 기준은 낮은 점수대에서 과도하게 관대해 제거 — 40점 vs 0점이 일치로 잡히던 문제)
     const bandsMatch = (a, b) => state.mode === 'grade'
       ? normToGrade(a) === normToGrade(b)
-      : (scoreToBand(a) === scoreToBand(b) || Math.abs(a - b) <= 10);
+      : Math.abs(a - b) <= 10;
 
     async function runAnalysis() {
       if (state.isAnalyzing) return;
@@ -952,7 +953,7 @@
       progress.init([
         '데이터 준비 · 검증용 답안 분리',
         'AI 루브릭 채점 (교사 점수 미참조)',
-        '자기일관성 측정 (표본 3개 반복 채점)',
+        '자기일관성 측정 (표본 5개 반복 채점)',
         '채점 성향 추출 · 보정표 생성',
         '맞춤 채점 안내문 작성',
         '검증 답안 채점 (루브릭만)',
@@ -1094,11 +1095,13 @@
       }));
     }
 
-    // 자기일관성: 저/중/고 점수대 표본 3개를 2회씩 추가 채점(1회차 결과 포함 총 3회)해
+    // 자기일관성: 점수대별 표본 5개를 2회씩 추가 채점(1회차 결과 포함 총 3회)해
     // 같은 결과가 나오는 비율을 측정한다. 이 수치가 AI 재현율의 천장이다.
     async function measureSelfConsistency(aiScores) {
       const n = state.analysisAnswers.length;
-      const idxs = n <= 3 ? state.analysisAnswers.map((_, i) => i) : [0, Math.floor(n / 2), n - 1]; // 정렬 상태이므로 저/중/고
+      const idxs = n <= 5
+        ? state.analysisAnswers.map((_, i) => i)
+        : [0, 1, 2, 3, 4].map(k => Math.round(k * (n - 1) / 4)); // 정렬 상태이므로 점수대 고르게 5개
       let done = 0; const total = idxs.length * 2;
       const agrees = await Promise.all(idxs.map(async idx => {
         const a = state.analysisAnswers[idx];

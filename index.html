@@ -416,7 +416,10 @@
       <div class="card">
         <div class="card-head">
           <span class="card-title">최종 채점 안내문</span>
-          <button class="btn btn-ghost btn-sm" id="copyDocBtn" disabled>전체 복사</button>
+          <div style="display:flex; gap:8px;">
+            <button class="btn btn-ghost btn-sm" id="copyDocBtn" disabled>전체 복사</button>
+            <button class="btn btn-primary btn-sm" id="exportPromptBtn" disabled>AI 채점용 프롬프트 복사</button>
+          </div>
         </div>
         <div class="doc-viewer" id="docViewer">분석 완료 후 채점 안내문이 여기에 생성됩니다.</div>
       </div>
@@ -1318,6 +1321,7 @@
     function renderOutputResults() {
       $('docViewer').textContent = state.finalDocument || '생성된 안내문이 없습니다.';
       $('copyDocBtn').disabled = !state.finalDocument;
+      $('exportPromptBtn').disabled = !state.analysisDone;
       $('valTag').textContent = state.validationResults.length
         ? `참고용 · 표본 ${state.validationResults.length}개`
         : '';
@@ -1445,6 +1449,54 @@
         state.isAnalyzing = false;
       }
     }
+
+    // ==================== AI 채점용 프롬프트 내보내기 ====================
+    // 연구 최종 산출물(v04.md)과 같은 시스템 프롬프트 형식 — LLM에 그대로 넣어 채점 재현 가능
+    function buildExportPrompt() {
+      const isGrade = state.mode === 'grade';
+      const calibText = state.calibration.length
+        ? state.calibration.map(c => `- [${c.방향}] ${c.성향} — 평균 ${c.평균점수범위}점 (조건: ${c.적용조건})`).join('\n')
+        : '- (양적 보정값 없음)';
+      // 이유가 있는 답안을 점수대별로 고르게 최대 5개 예시로
+      const withReason = state.analysisAnswers.filter(a => a.reason && a.reason.trim());
+      const step = Math.max(1, Math.floor(withReason.length / 5));
+      const examples = withReason.filter((_, i) => i % step === 0).slice(0, 5);
+      const exText = examples.length
+        ? examples.map((a, i) => `예시 ${i + 1} — 교사 판정 "${isGrade ? a.grade : a.score + '점'}"\n답안: ${a.text}\n교사 이유: ${a.reason}`).join('\n\n')
+        : '(채점 이유가 입력된 예시 없음)';
+      const scaleLine = isGrade
+        ? `등급은 높은 순서대로 ${state.gradeLabels.join(' > ')} 이다.`
+        : `점수는 0~${state.maxScore}점 정수${state.maxScore !== 100 ? ` (내부 성향 수치는 100점 만점 기준이므로 ×${state.maxScore}/100로 환산해 적용)` : ''}이다.`;
+      const outFormat = isGrade
+        ? `{"평가": "${state.gradeLabels.join('|')} 중 하나", "이유": "판정 근거 한두 문장"}`
+        : `{"점수": 0~${state.maxScore} 정수, "이유": "배점 근거 한두 문장"}`;
+      return `너는 서술형 평가를 채점하는 보조 채점자다. 아래 루브릭과 담당 교사의 채점 성향에 따라 학생 답안을 평가한다. ${scaleLine}
+
+## 담당 교사의 루브릭
+${state.rubric}
+
+## 담당 교사의 채점 성향 (실제 채점 데이터 ${state.analysisAnswers.length}건에서 추출, ${state.round}차 보정)
+${state.tendencies.map((t, i) => `${i + 1}. ${t}`).join('\n')}
+
+## 양적 보정표 (100점 만점 기준)
+${calibText}
+
+## 채점 예시 (이 교사의 실제 채점)
+${exText}
+
+## 출력 형식
+반드시 아래 JSON 한 개만 출력한다. 다른 말은 붙이지 않는다.
+${outFormat}`;
+    }
+
+    $('exportPromptBtn').addEventListener('click', async () => {
+      if (!state.analysisDone) return;
+      await navigator.clipboard.writeText(buildExportPrompt());
+      const b = $('exportPromptBtn'); const t = b.textContent;
+      b.textContent = '복사됨 ✓';
+      setTimeout(() => { b.textContent = t; }, 2000);
+      showToast('AI 채점용 시스템 프롬프트가 복사되었습니다. ChatGPT·Claude·Solar 등에 붙여넣고 학생 답안을 주면 이 교사처럼 채점합니다.', 'good');
+    });
 
     // ==================== MISC ====================
     $('analyzeBtn').addEventListener('click', runAnalysis);

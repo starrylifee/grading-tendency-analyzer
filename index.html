@@ -327,6 +327,7 @@
           <span style="font-size:0.83rem; color:var(--ink-2);">최소 7개 · 권장 10~20개 (답안 수의 20%, 최대 3개를 검증용으로 자동 분리)</span>
         </div>
         <div class="card-body">
+          <div class="alert alert-warn" style="font-size:0.85rem;">학생 이름·학번 등 개인정보는 답안 텍스트에서 <b>지우고</b> 입력하세요. 답안은 AI 분석 요청에 전송됩니다.</div>
           <div class="table-wrap">
             <table>
               <thead>
@@ -422,7 +423,7 @@
 
       <div class="card">
         <div class="card-head">
-          <span class="card-title">검증 : 분리해 둔 답안으로 재현도 확인</span>
+          <span class="card-title">검증 : 분리해 둔 답안으로 재현도 확인 <span class="tag" id="valTag"></span></span>
         </div>
         <div class="card-body">
           <p style="font-size:0.88rem; color:var(--ink-2); margin-bottom:14px;">
@@ -965,7 +966,9 @@
         const low = sorted.slice(0, Math.floor(n / 3));
         const mid = sorted.slice(Math.floor(n / 3), Math.floor(2 * n / 3));
         const high = sorted.slice(Math.floor(2 * n / 3));
-        const pick = (arr, k) => [...arr].sort(() => Math.random() - 0.5).slice(0, k);
+        // 답안 텍스트 해시로 고정 분할 — 같은 데이터면 항상 같은 검증 세트 (재현 가능)
+        const hash = s => { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return h >>> 0; };
+        const pick = (arr, k) => [...arr].sort((a, b) => hash(a.text) - hash(b.text)).slice(0, k);
         const per = Math.max(1, Math.floor(valCount / 3));
         const picks = [...pick(low, per), ...pick(mid, per), ...pick(high, valCount - 2 * per)].slice(0, valCount);
         const pickIds = new Set(picks.map(a => a.id));
@@ -1315,6 +1318,9 @@
     function renderOutputResults() {
       $('docViewer').textContent = state.finalDocument || '생성된 안내문이 없습니다.';
       $('copyDocBtn').disabled = !state.finalDocument;
+      $('valTag').textContent = state.validationResults.length
+        ? `참고용 · 표본 ${state.validationResults.length}개`
+        : '';
 
       $('validationBody').innerHTML = state.validationResults.length
         ? state.validationResults.map((v, i) => `

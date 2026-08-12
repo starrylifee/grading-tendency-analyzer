@@ -3,3 +3,6 @@ node_modules/
 .env
 .env.*
 앨리스 서술형 채점 성향 분석기.html
+
+.vercel
+.env*

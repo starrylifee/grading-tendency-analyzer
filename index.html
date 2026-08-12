@@ -1028,9 +1028,9 @@
         state.finalDocument = await generateFinalDocument();
         progress.finish(4);
 
-        // [5] 검증: 루브릭만
+        // [5] 검증: 루브릭만 (성향 예측과 공정 비교 위해 3회 중앙값)
         progress.start(5);
-        const rubricOnly = await gradeWithRubricOnly(state.rubric, state.validationAnswers, (d, t) => progress.note(5, `${d}/${t} 답안 완료`));
+        const rubricOnly = await gradeRubricOnlyStable(state.rubric, state.validationAnswers, (d, t) => progress.note(5, `${d}/${t} 답안 완료`));
         state.validationRubricOnly = rubricOnly;
         progress.finish(5);
 
@@ -1109,8 +1109,20 @@
       }));
     }
 
+    // 검증용 루브릭만 채점 — 성향 예측(3회 중앙값)과 공정 비교하려고 동일하게 3회 중앙값
+    async function gradeRubricOnlyStable(rubric, answers, onEach) {
+      const runs = await Promise.all([0, 1, 2].map(() => gradeWithRubricOnly(rubric, answers)));
+      if (onEach) onEach(answers.length, answers.length);
+      return answers.map((_, i) => {
+        const vals = runs.map(r => r[i]).filter(v => Number.isFinite(v));
+        if (!vals.length) return runs[0][i];
+        const s = [...vals].sort((x, y) => x - y);
+        return s[Math.floor(s.length / 2)];
+      });
+    }
+
     // 자기일관성: 점수대별 표본 5개를 2회씩 추가 채점(1회차 결과 포함 총 3회)해
-    // 같은 결과가 나오는 비율을 측정한다. 이 수치가 AI 재현율의 천장이다.
+    // 같은 결과가 나오는 비율을 측정한다(AI 채점 흔들림 참고치, 표본이 적어 근사).
     async function measureSelfConsistency(aiScores) {
       const n = state.analysisAnswers.length;
       const idxs = n <= 5
@@ -1299,7 +1311,7 @@
     function renderAnalysisResults() {
       // 정규화 안내
       const scAlert = state.selfConsistency !== null
-        ? `<div class="alert ${state.selfConsistency >= 80 ? 'alert-info' : 'alert-warn'}"><b>자기일관성 ${state.selfConsistency}%</b> — AI가 같은 답안을 3회 반복 채점했을 때 같은 결과가 나온 비율입니다. 성향 재현율은 이 수치를 넘기 어렵습니다(재현율의 천장). ${state.selfConsistency < 80 ? '일관성이 낮으면 불일치 일부는 교사 성향이 아니라 AI 흔들림일 수 있습니다.' : ''}</div>`
+        ? `<div class="alert ${state.selfConsistency >= 80 ? 'alert-info' : 'alert-warn'}"><b>AI 채점 흔들림 참고치 ${state.selfConsistency}%</b> (표본 5개) — AI가 같은 답안을 3회 반복 채점했을 때 같은 결과가 나온 비율입니다. 표본이 적어 대략적인 참고용입니다. ${state.selfConsistency < 80 ? '이 값이 낮으면 아래 불일치의 일부는 교사 성향이 아니라 AI 자체의 흔들림일 수 있습니다.' : '값이 높을수록 아래 결과를 더 믿을 수 있습니다.'}</div>`
         : '';
       $('normInfoAlert').innerHTML = scAlert + (state.mode === 'grade'
         ? `<div class="alert alert-info">등급제(<b>${state.gradeLabels.join('/')}</b>) 분석입니다. 내부적으로 등급을 100점 척도(${state.gradeLabels.map(l => l + '=' + gradeToNorm(l)).join(', ')})로 정규화해 분석했고, 표에는 등급으로 표시합니다.</div>`
@@ -1364,13 +1376,17 @@
         ? `<div class="alert alert-info">보정 이력: ${state.roundHistory.map(h => `${h.round}차 ${h.matches}/${h.total} 일치`).join(' → ')}</div>`
         : '';
       if (mismCount === 0) {
-        $('diagBody').innerHTML = historyLine + `<div class="alert alert-good" style="margin-bottom:0;"><b>모든 검증 답안이 일치했습니다.</b> 추출된 성향이 이 교사의 채점을 잘 재현합니다. 안내문을 그대로 활용하셔도 좋습니다.</div>`;
+        const n = state.validationResults.length;
+        const msg = n >= 3
+          ? `<b>검증 답안 ${n}개가 모두 일치했습니다.</b> 추출된 성향이 이 교사의 채점을 잘 따라가는 편입니다. 다만 표본이 ${n}개라 확정은 아니니, 실제 채점에 쓰면서 몇 건 대조해 보세요.`
+          : `<b>검증 답안 ${n}개가 일치했습니다.</b> 표본이 ${n}개뿐이라 재현 여부를 단정하긴 어렵습니다. 답안을 15개 이상 넣으면 검증이 더 믿을 만해집니다.`;
+        $('diagBody').innerHTML = historyLine + `<div class="alert ${n >= 3 ? 'alert-good' : 'alert-warn'}" style="margin-bottom:0;">${msg}</div>`;
         return;
       }
       const refineBlock = state.round < MAX_ROUNDS
         ? `<div style="text-align:center; margin-top:16px;">
-             <button class="btn btn-primary" id="refineBtn">${state.round + 1}차 보정 실행 — 진단을 반영해 성향 수정 후 재검증</button>
-             <p class="hint" style="margin-top:8px;">연구 검증 결과, 이런 보정 루프를 반복할수록 재현율이 올라갑니다 (최대 ${MAX_ROUNDS}차).</p>
+             <button class="btn btn-primary" id="refineBtn">${state.round + 1}차 보정 실행 — 진단을 반영해 성향 보강 후 재검증</button>
+             <p class="hint" style="margin-top:8px;">분석 답안(검증 세트 제외)의 남은 차이를 성향에 보강한 뒤, 떼어둔 검증 답안으로 다시 평가합니다. 표본이 작아 회차마다 좋아진다는 보장은 없습니다 (최대 ${MAX_ROUNDS}차).</p>
            </div>`
         : `<div class="alert alert-info" style="margin-top:16px; margin-bottom:0;">최대 보정 회차(${MAX_ROUNDS}차)에 도달했습니다. 남은 불일치는 답안·채점 이유를 보완해 새로 분석하는 것을 권합니다.</div>`;
       $('diagBody').innerHTML = historyLine +
@@ -1394,28 +1410,30 @@
       if (rb) rb.addEventListener('click', runRefineRound);
     }
 
-    // ==================== 보정 루프 (연구의 vN → vN+1 회차에 해당) ====================
-    async function refineTendencies() {
+    // ==================== 보정 루프 ====================
+    // 검증 세트 오염을 피하려고, 보정 재료는 "검증 답안"이 아니라 "분석 답안 중 루브릭만 채점과 교사가
+    // 크게 어긋난 사례"를 쓴다. 성향을 보강한 뒤, 손대지 않은 검증(홀드아웃)으로 다시 평가한다.
+    async function refineTendencies(mismatchCases) {
       const calibText = state.calibration.length
         ? state.calibration.map((c, i) => `${i + 1}. [${c.방향}] ${c.성향} — ${c.평균점수범위}점 (조건: ${c.적용조건})`).join('\n')
         : '(없음)';
-      const diagText = state.diagnoses.map(({ item, diag }, i) =>
-        `사례 ${i + 1}: 답안 "${item.answer.text.slice(0, 250)}"\n  교사 실제 ${fmtOrig(item.teacherNorm)} (이유: ${item.answer.reason || '없음'}) / 루브릭만 ${fmtOrig(item.rubricNorm)} / 성향 반영 예측 ${fmtOrig(item.tendencyNorm)}\n  진단: ${diag ? `${diag.type} — ${diag.explanation || ''} / 제안: ${diag.suggestion || ''}` : '자동 진단 실패'}`
+      const caseText = mismatchCases.map((d, i) =>
+        `사례 ${i + 1}: 답안 "${d.answer.text.slice(0, 250)}"\n  교사 실제 ${fmtOrig(d.teacherNorm)} (이유: ${d.answer.reason || '없음'}) / 루브릭만 AI 채점 ${fmtOrig(d.aiNorm)} → 교사가 ${d.diff < 0 ? '더 낮게(엄격)' : '더 높게(관대)'} 줌`
       ).join('\n\n');
       const systemPrompt = `당신은 교사 채점 성향 프롬프트를 개선하는 루프 조정자입니다. 점수는 ${scaleDesc()}입니다.
 
-현재 성향·보정표로 예측했을 때 불일치가 난 검증 사례와 그 진단이 주어집니다. 불일치가 해소되도록 성향과 보정표를 수정하세요.
+현재 성향·보정표로는 아직 설명되지 않는, 교사 채점과 루브릭 기계 채점의 차이 사례가 주어집니다. 이 차이를 설명하도록 성향과 보정표를 보강하세요.
 
 [수정 원칙]
-1. 진단이 SYSTEM_MISS면 놓친 감점/가점 요인을 새 성향·보정 항목으로 추가한다.
-2. 진단이 SYSTEM_OVER면 과도한 보정 항목의 폭을 줄이거나 적용조건을 좁힌다.
-3. 진단이 TEACHER_INCONSISTENT면 그 사례 하나에 과적합하지 말고 기존 성향을 유지한다.
+1. 교사가 루브릭보다 낮게 준 사례 → 놓친 감점 요인을 성향·보정 항목으로 추가.
+2. 교사가 루브릭보다 높게 준 사례 → 놓친 가점(대안 풀이 인정 등) 요인을 추가.
+3. 사례 1건에만 들어맞는 지나치게 구체적인 규칙은 만들지 않는다(과적합 금지). 여러 사례에 공통된 패턴만 일반화.
 4. 이미 잘 맞는 성향은 절대 삭제하지 않는다. 수정은 최소한으로.
 5. 성향은 최대 6개, 보정표는 최대 8개.
 
 출력: JSON 객체 하나만.
 {"tendencies": ["이 교사는 ~", ...], "calibration": [{"성향":"...","방향":"감점|가점","평균점수범위":"-10~-15","적용조건":"..."}]}`;
-      const prompt = `[루브릭]\n${state.rubric}\n\n[현재 성향 (${state.round}차)]\n${state.tendencies.map((t, i) => `${i + 1}. ${t}`).join('\n')}\n\n[현재 보정표]\n${calibText}\n\n[교사의 전체 채점 패턴 (분석용 답안)]\n${state.analysisAnswers.map(a => `- 답안: ${a.text.slice(0, 120)} / 교사: ${fmtOrig(a.normScore)} / 이유: ${a.reason || '없음'}`).join('\n')}\n\n[불일치 사례와 진단]\n${diagText}\n\n위 수정 원칙대로 성향과 보정표를 개선해 JSON 객체 하나로만 응답하세요.`;
+      const prompt = `[루브릭]\n${state.rubric}\n\n[현재 성향 (${state.round}차)]\n${state.tendencies.map((t, i) => `${i + 1}. ${t}`).join('\n')}\n\n[현재 보정표]\n${calibText}\n\n[아직 설명되지 않는 차이 사례 (분석 답안)]\n${caseText}\n\n위 수정 원칙대로 성향과 보정표를 보강해 JSON 객체 하나로만 응답하세요.`;
       const parsed = await callJSONObject(prompt, systemPrompt, 0.3);
       const tendencies = Array.isArray(parsed.tendencies) ? parsed.tendencies.slice(0, 6) : state.tendencies;
       const calibration = Array.isArray(parsed.calibration)
@@ -1433,8 +1451,19 @@
       const btn = $('refineBtn');
       const setBtn = t => { if (btn) { btn.disabled = true; btn.textContent = t; } };
       try {
-        setBtn('성향 수정 중... (1/4)');
-        const revised = await refineTendencies();
+        // 보정 재료: 분석 답안 중 루브릭만 채점과 교사가 크게(정규화 10점 초과) 어긋난 사례 (검증 세트는 손대지 않음)
+        const analysisMism = state.comparisonData
+          .filter(d => Math.abs(d.diff) > 10)
+          .sort((a, b) => Math.abs(b.diff) - Math.abs(a.diff))
+          .slice(0, 8);
+        if (!analysisMism.length) {
+          showToast('분석 답안에서 더 보정할 차이가 없습니다. 현재 성향이 이미 분석 데이터를 잘 설명합니다. 남은 검증 불일치는 답안·이유를 보완해 새로 분석하세요.', 'info');
+          state.isAnalyzing = false;
+          if (btn) { btn.disabled = false; btn.textContent = `${state.round + 1}차 보정 실행 — 진단을 반영해 성향 보강 후 재검증`; }
+          return;
+        }
+        setBtn('성향 보강 중... (1/4)');
+        const revised = await refineTendencies(analysisMism);
         state.tendencies = revised.tendencies;
         state.calibration = revised.calibration;
         setBtn('안내문 재작성 중... (2/4)');

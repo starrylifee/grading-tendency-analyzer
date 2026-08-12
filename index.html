@@ -634,7 +634,7 @@
                  <option value="" ${!a.grade ? 'selected' : ''}>선택</option>
                  ${state.gradeLabels.map(l => `<option value="${esc(l)}" ${a.grade === l ? 'selected' : ''}>${esc(l)}</option>`).join('')}
                </select>`
-            : `<input type="number" data-f="score" value="${a.score}" min="0" max="${state.maxScore}" step="0.5">
+            : `<input type="number" data-f="score" value="${a.score ?? ''}" min="0" max="${state.maxScore}" step="0.5" placeholder="점수">
                <span class="norm-sub">/ ${state.maxScore}점</span>`}</td>
           <td><textarea data-f="reason" rows="2" placeholder="왜 이 점수를 주었는지">${esc(a.reason || '')}</textarea></td>
           <td><button class="del-btn" data-del="${a.id}" aria-label="삭제">×</button></td>
@@ -646,7 +646,11 @@
           const ans = state.answers.find(x => x.id === id);
           if (!ans) return;
           const f = e.target.dataset.f;
-          ans[f] = f === 'score' ? (parseFloat(e.target.value) || 0) : e.target.value;
+          if (f === 'score') {
+            const raw = e.target.value.trim();
+            const n = parseFloat(raw);
+            ans.score = raw === '' || !Number.isFinite(n) ? null : n;  // 빈 칸/오입력은 null (0점 아님)
+          } else ans[f] = e.target.value;
         });
       });
       answersBody.querySelectorAll('[data-del]').forEach(b => {
@@ -656,7 +660,7 @@
         });
       });
     }
-    function addAnswerRow(d = { text: '', score: 0, reason: '' }) {
+    function addAnswerRow(d = { text: '', score: null, reason: '' }) {
       state.answers.push({ id: uid(), ...d });
       renderAnswersTable();
     }
@@ -665,7 +669,12 @@
       if (e.key === 'Enter' && e.ctrlKey && document.activeElement.tagName === 'TEXTAREA') {
         const rows = answersBody.querySelectorAll('tr[data-id]');
         const last = rows[rows.length - 1];
-        if (last && document.activeElement.closest('tr') === last) { e.preventDefault(); addAnswerRow(); }
+        if (last && document.activeElement.closest('tr') === last) {
+          e.preventDefault();
+          // 지금 입력 중이던 값을 먼저 state에 반영한 뒤 새 행을 그린다 (재렌더로 사라지는 것 방지)
+          document.activeElement.dispatchEvent(new Event('change', { bubbles: true }));
+          addAnswerRow();
+        }
       }
     });
 
@@ -889,22 +898,23 @@
       return gradeToNorm(g);
     }
 
-    // 단일 객체 기대 호출 (배열로 오면 첫 요소 사용, 실패 시 1회 재시도)
-    async function callJSONObject(prompt, systemPrompt, temperature, tries = 2) {
+    // 단일 객체 기대 호출 (배열로 오면 첫 요소 사용, 실패 시 재시도)
+    // validate(obj)가 주어지면 통과할 때까지 재시도 — 형식만 맞고 값이 깨진 응답을 걸러냄
+    async function callJSONObject(prompt, systemPrompt, temperature, validate = null, tries = 2) {
       let lastErr;
       for (let t = 0; t < tries; t++) {
         try {
           const parsed = parseJsonFromResponse(await callLLM(prompt, systemPrompt, temperature));
           const obj = Array.isArray(parsed) ? parsed[0] : parsed;
-          if (obj && typeof obj === 'object') return obj;
-          lastErr = new Error('AI 응답이 JSON 객체가 아닙니다.');
+          if (obj && typeof obj === 'object' && (!validate || validate(obj))) return obj;
+          lastErr = new Error('AI 응답 형식이 올바르지 않습니다.');
         } catch (e) { lastErr = e; }
       }
       throw lastErr;
     }
 
     // ==================== PIPELINE ====================
-    const clamp100 = v => Math.max(0, Math.min(100, Math.round(v)));
+    const clamp100 = v => { const n = Number(v); return Number.isFinite(n) ? Math.max(0, Math.min(100, Math.round(n))) : NaN; };
     // 일치 판정: 등급제는 등급 완전 일치, 점수제는 ±10점(정규화 기준) 단일 기준
     // (A~F 등급 병행 기준은 낮은 점수대에서 과도하게 관대해 제거 — 40점 vs 0점이 일치로 잡히던 문제)
     const bandsMatch = (a, b) => state.mode === 'grade'
@@ -923,8 +933,10 @@
         const noGrade = state.answers.filter(a => a.text.trim() && !state.gradeLabels.includes(a.grade));
         if (noGrade.length) { showToast(`등급이 선택되지 않은 답안이 ${noGrade.length}개 있습니다.`, 'bad'); return; }
       } else {
-        valid = state.answers.filter(a => a.text.trim() && a.score >= 0 && a.score <= state.maxScore);
-        const outOfRange = state.answers.filter(a => a.text.trim() && (a.score < 0 || a.score > state.maxScore));
+        const noScore = state.answers.filter(a => a.text.trim() && !Number.isFinite(a.score));
+        if (noScore.length) { showToast(`점수가 비어 있는 답안이 ${noScore.length}개 있습니다. 점수를 입력하거나 답안을 지워주세요.`, 'bad'); return; }
+        valid = state.answers.filter(a => a.text.trim() && Number.isFinite(a.score) && a.score >= 0 && a.score <= state.maxScore);
+        const outOfRange = state.answers.filter(a => a.text.trim() && Number.isFinite(a.score) && (a.score < 0 || a.score > state.maxScore));
         if (outOfRange.length) { showToast(`만점(${state.maxScore}점)을 벗어난 점수가 ${outOfRange.length}개 있습니다. 수정해주세요.`, 'bad'); return; }
       }
       if (valid.length < 7) { showToast('최소 7개 이상의 유효한 답안이 필요합니다.', 'warn'); return; }
@@ -972,9 +984,10 @@
         const high = sorted.slice(Math.floor(2 * n / 3));
         // 답안 텍스트 해시로 고정 분할 — 같은 데이터면 항상 같은 검증 세트 (재현 가능)
         const hash = s => { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return h >>> 0; };
-        const pick = (arr, k) => [...arr].sort((a, b) => hash(a.text) - hash(b.text)).slice(0, k);
-        const per = Math.max(1, Math.floor(valCount / 3));
-        const picks = [...pick(low, per), ...pick(mid, per), ...pick(high, valCount - 2 * per)].slice(0, valCount);
+        const one = arr => arr.length ? [...arr].sort((a, b) => hash(a.text) - hash(b.text))[0] : null;
+        // 검증 세트를 점수대별로 균형 있게: 1개=중위(대표), 2개=최저·최고(양극단), 3개=저·중·고
+        const buckets = valCount >= 3 ? [low, mid, high] : valCount === 2 ? [low, high] : [mid];
+        const picks = buckets.map(one).filter(Boolean);
         const pickIds = new Set(picks.map(a => a.id));
         state.validationAnswers = picks;
         state.analysisAnswers = sorted.filter(a => !pickIds.has(a.id));
@@ -1086,9 +1099,10 @@
 
 출력: JSON 객체 하나만. {"score": 정수, "reason": "항목별 배점 근거"}`;
       let done = 0;
+      const scoreValid = o => Number.isFinite(Number(o.score));
       return Promise.all(answers.map(async a => {
         const prompt = `[루브릭]\n${rubric}\n\n[학생 답안]\n${a.text}\n\n이 답안을 루브릭 기준대로 ${isGrade ? '등급 판정해' : '채점해'} JSON 객체 하나로만 응답하세요.`;
-        const obj = await callJSONObject(prompt, systemPrompt, 0.1);
+        const obj = await callJSONObject(prompt, systemPrompt, 0.1, isGrade ? null : scoreValid);
         if (onEach) onEach(++done, answers.length);
         if (isGrade) return parseGradeResult(obj, prompt, systemPrompt);
         return clamp100(Number(obj.score));

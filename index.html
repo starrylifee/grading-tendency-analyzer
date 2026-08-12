@@ -1,0 +1,1138 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>서술형 채점 성향 분석기</title>
+  <meta name="description" content="루브릭과 채점 데이터를 입력하면 Solar Pro 3가 교사의 채점 성향을 분석해 맞춤 채점 안내문을 만들어 드립니다.">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="서술형 채점 성향 분석기">
+  <meta property="og:description" content="루브릭과 채점 데이터를 넣으면 AI가 선생님의 채점 성향을 분석해 맞춤 채점 안내문을 생성합니다.">
+  <meta property="og:image" content="https://grading-tendency-analyzer.vercel.app/og.png">
+  <meta property="og:url" content="https://grading-tendency-analyzer.vercel.app">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" as="style" crossorigin href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+  <style>
+    :root {
+      --bg: #f4f6fa;
+      --surface: #ffffff;
+      --surface-2: #f8f9fc;
+      --border: #e4e8f0;
+      --border-strong: #cfd6e4;
+      --ink: #1a2233;
+      --ink-2: #5b6478;
+      --ink-3: #9aa3b8;
+      --accent: #3d56c5;
+      --accent-hover: #2f44a3;
+      --accent-soft: #eef1fc;
+      --accent-line: #c9d2f2;
+      --good: #1d8a4e;
+      --good-soft: #e7f5ec;
+      --warn: #b97f10;
+      --warn-soft: #fdf5e3;
+      --bad: #c73a3a;
+      --bad-soft: #fdecec;
+      --shadow: 0 1px 3px rgba(26,34,51,0.05), 0 6px 20px rgba(26,34,51,0.05);
+      --r: 10px;
+      --r-lg: 14px;
+      --font: 'Pretendard Variable', Pretendard, 'Noto Sans KR', -apple-system, sans-serif;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html { font-size: 16px; }
+    body { font-family: var(--font); background: var(--bg); color: var(--ink); line-height: 1.65; min-height: 100vh; }
+    .app { max-width: 1080px; margin: 0 auto; padding: 28px 20px 60px; }
+
+    /* ===== Header ===== */
+    .topbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 26px; flex-wrap: wrap; }
+    .brand { display: flex; align-items: center; gap: 14px; }
+    .brand-mark {
+      width: 44px; height: 44px; border-radius: 12px; flex-shrink: 0;
+      background: linear-gradient(135deg, #3d56c5, #6a3dc5);
+      display: flex; align-items: center; justify-content: center;
+      color: #fff; font-weight: 800; font-size: 1.15rem; letter-spacing: -0.02em;
+      box-shadow: 0 4px 12px rgba(61,86,197,0.3);
+    }
+    .brand h1 { font-size: 1.45rem; font-weight: 800; letter-spacing: -0.03em; }
+    .brand .sub { font-size: 0.85rem; color: var(--ink-2); margin-top: 1px; }
+    .solar-badge {
+      display: inline-flex; align-items: center; gap: 7px;
+      padding: 7px 14px; border-radius: 100px;
+      background: var(--surface); border: 1px solid var(--border);
+      font-size: 0.82rem; font-weight: 600; color: var(--ink-2); box-shadow: var(--shadow);
+    }
+    .solar-badge .dot { width: 8px; height: 8px; border-radius: 50%; background: #7a4fd8; box-shadow: 0 0 6px rgba(122,79,216,0.6); }
+
+    /* ===== Stepper ===== */
+    .stepper { display: flex; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg); box-shadow: var(--shadow); margin-bottom: 24px; overflow: hidden; }
+    .step {
+      flex: 1; display: flex; align-items: center; gap: 11px; padding: 15px 18px;
+      background: none; border: none; cursor: pointer; font-family: var(--font);
+      border-right: 1px solid var(--border); transition: background 0.15s; text-align: left;
+    }
+    .step:last-child { border-right: none; }
+    .step:hover:not(:disabled) { background: var(--surface-2); }
+    .step:disabled { cursor: not-allowed; opacity: 0.55; }
+    .step-num {
+      width: 28px; height: 28px; border-radius: 50%; flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.85rem; font-weight: 700;
+      background: var(--surface-2); color: var(--ink-3); border: 1.5px solid var(--border-strong);
+      transition: all 0.15s;
+    }
+    .step.active .step-num { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .step.done .step-num { background: var(--good-soft); color: var(--good); border-color: var(--good); }
+    .step-label { display: flex; flex-direction: column; min-width: 0; }
+    .step-label b { font-size: 0.95rem; font-weight: 700; color: var(--ink-3); white-space: nowrap; }
+    .step.active .step-label b { color: var(--accent); }
+    .step.done .step-label b { color: var(--ink); }
+    .step-label span { font-size: 0.75rem; color: var(--ink-3); white-space: nowrap; }
+
+    .panel { display: none; animation: fade 0.22s ease; }
+    .panel.active { display: block; }
+    @keyframes fade { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: none; } }
+
+    /* ===== Cards ===== */
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg); box-shadow: var(--shadow); margin-bottom: 18px; overflow: hidden; }
+    .card-head { padding: 16px 22px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
+    .card-title { font-size: 1.05rem; font-weight: 700; letter-spacing: -0.01em; display: flex; align-items: center; gap: 9px; }
+    .card-title .tag { font-size: 0.72rem; font-weight: 600; color: var(--accent); background: var(--accent-soft); padding: 3px 9px; border-radius: 100px; }
+    .card-body { padding: 22px; }
+
+    /* ===== Forms ===== */
+    .field { margin-bottom: 18px; }
+    .field:last-child { margin-bottom: 0; }
+    .field label { display: block; font-size: 0.92rem; font-weight: 600; margin-bottom: 7px; }
+    .hint { font-size: 0.82rem; color: var(--ink-2); margin-top: 6px; }
+    textarea, input[type="text"], input[type="number"] {
+      width: 100%; padding: 11px 14px; border: 1px solid var(--border-strong); border-radius: var(--r);
+      font-family: var(--font); font-size: 0.95rem; color: var(--ink); background: var(--surface);
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }
+    textarea { min-height: 200px; resize: vertical; line-height: 1.7; }
+    textarea:focus, input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+    ::placeholder { color: var(--ink-3); }
+
+    .max-score-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+    .max-score-row input { width: 110px; text-align: center; font-weight: 700; font-size: 1.05rem; }
+    .norm-note {
+      flex: 1; min-width: 260px; font-size: 0.85rem; color: var(--ink-2);
+      background: var(--accent-soft); border: 1px solid var(--accent-line); border-radius: var(--r); padding: 10px 14px;
+    }
+
+    /* ===== Buttons ===== */
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+      padding: 11px 22px; border: none; border-radius: var(--r);
+      font-family: var(--font); font-size: 0.95rem; font-weight: 600; cursor: pointer; transition: all 0.15s;
+    }
+    .btn-primary { background: var(--accent); color: #fff; box-shadow: 0 2px 8px rgba(61,86,197,0.25); }
+    .btn-primary:hover:not(:disabled) { background: var(--accent-hover); }
+    .btn-ghost { background: var(--surface); color: var(--ink); border: 1px solid var(--border-strong); }
+    .btn-ghost:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+    .btn-sm { padding: 7px 14px; font-size: 0.85rem; }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; box-shadow: none; }
+    .nav-row { display: flex; justify-content: space-between; gap: 12px; margin-top: 4px; }
+
+    /* ===== Table ===== */
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
+    th, td { padding: 11px 14px; text-align: left; border-bottom: 1px solid var(--border); vertical-align: top; }
+    th { background: var(--surface-2); font-weight: 700; color: var(--ink-2); font-size: 0.78rem; letter-spacing: 0.03em; white-space: nowrap; }
+    tr:last-child td { border-bottom: none; }
+    td textarea { min-height: 0; padding: 8px 10px; font-size: 0.88rem; border-color: var(--border); }
+    td input[type="number"] { width: 84px; padding: 8px; text-align: center; font-weight: 600; }
+    .del-btn { background: none; border: none; color: var(--ink-3); cursor: pointer; font-size: 1.15rem; line-height: 1; padding: 5px 8px; border-radius: 6px; }
+    .del-btn:hover { color: var(--bad); background: var(--bad-soft); }
+    .empty-row td { text-align: center; color: var(--ink-3); padding: 38px; }
+    .answer-col { min-width: 280px; }
+    .center { text-align: center !important; }
+
+    /* ===== Progress ===== */
+    .progress-card { text-align: center; padding: 34px 24px; }
+    .progress-pct { font-size: 3rem; font-weight: 800; letter-spacing: -0.03em; color: var(--accent); line-height: 1.1; font-variant-numeric: tabular-nums; }
+    .progress-stage { font-size: 1rem; color: var(--ink); font-weight: 600; margin-top: 6px; }
+    .progress-elapsed { font-size: 0.83rem; color: var(--ink-3); margin-top: 3px; font-variant-numeric: tabular-nums; }
+    .progress-track { height: 10px; background: var(--border); border-radius: 100px; overflow: hidden; margin: 18px auto 0; max-width: 560px; }
+    .progress-fill { height: 100%; width: 0%; border-radius: 100px; background: linear-gradient(90deg, #3d56c5, #7a4fd8); transition: width 0.5s ease; }
+    .progress-steps { margin: 18px auto 0; max-width: 560px; text-align: left; font-size: 0.85rem; color: var(--ink-2); }
+    .progress-steps li { list-style: none; padding: 4px 0; display: flex; gap: 8px; align-items: baseline; }
+    .progress-steps li::before { content: '·'; color: var(--ink-3); }
+    .progress-steps li.done { color: var(--good); }
+    .progress-steps li.done::before { content: '✓'; }
+    .progress-steps li.now { color: var(--accent); font-weight: 600; }
+    .progress-steps li.now::before { content: '▸'; }
+
+    /* ===== Badges & Results ===== */
+    .score-badge { display: inline-block; padding: 4px 12px; border-radius: 100px; font-weight: 700; font-size: 0.88rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .score-badge.teacher { background: var(--ink); color: #fff; }
+    .score-badge.ai { background: var(--accent-soft); color: var(--accent); }
+    .score-badge.d-lg { background: var(--bad-soft); color: var(--bad); }
+    .score-badge.d-md { background: var(--warn-soft); color: var(--warn); }
+    .score-badge.d-sm { background: var(--good-soft); color: var(--good); }
+    .norm-sub { display: block; font-size: 0.72rem; color: var(--ink-3); margin-top: 3px; font-weight: 500; }
+
+    .tendency-list { list-style: none; }
+    .tendency-item {
+      display: flex; gap: 13px; align-items: flex-start;
+      padding: 14px 18px; border: 1px solid var(--border); border-radius: var(--r);
+      background: var(--surface-2); margin-bottom: 10px;
+    }
+    .tendency-item:last-child { margin-bottom: 0; }
+    .t-icon { width: 32px; height: 32px; border-radius: 50%; flex-shrink: 0; display: flex; align-items: center; justify-content: center; font-size: 0.95rem; font-weight: 700; }
+    .t-icon.up { background: var(--good-soft); color: var(--good); }
+    .t-icon.down { background: var(--bad-soft); color: var(--bad); }
+    .t-icon.flat { background: var(--accent-soft); color: var(--accent); }
+    .t-text { font-size: 0.95rem; }
+
+    .alert { padding: 13px 17px; border-radius: var(--r); font-size: 0.9rem; margin-bottom: 14px; display: flex; gap: 10px; align-items: flex-start; }
+    .alert b { font-weight: 700; }
+    .alert-warn { background: var(--warn-soft); color: #7a5408; border: 1px solid #f0dfb0; }
+    .alert-info { background: var(--accent-soft); color: #2b3d8f; border: 1px solid var(--accent-line); }
+    .alert-good { background: var(--good-soft); color: #14603a; border: 1px solid #bfe5cd; }
+    .alert-bad { background: var(--bad-soft); color: #8f2626; border: 1px solid #f2c4c4; }
+
+    /* ===== Document viewer ===== */
+    .doc-viewer {
+      padding: 34px 38px; max-height: 65vh; overflow-y: auto;
+      font-size: 0.98rem; line-height: 1.85; white-space: pre-wrap; word-wrap: break-word;
+    }
+
+    /* ===== Diagnosis cards ===== */
+    .diag-card { border: 1px solid var(--border); border-radius: var(--r); margin-bottom: 12px; overflow: hidden; }
+    .diag-head { padding: 12px 16px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; background: var(--surface-2); border-bottom: 1px solid var(--border); }
+    .diag-type { font-size: 0.78rem; font-weight: 700; padding: 4px 11px; border-radius: 100px; white-space: nowrap; }
+    .diag-type.system { background: var(--bad-soft); color: var(--bad); }
+    .diag-type.rubric { background: var(--warn-soft); color: var(--warn); }
+    .diag-type.teacher { background: var(--accent-soft); color: var(--accent); }
+    .diag-type.etc { background: var(--surface-2); color: var(--ink-2); border: 1px solid var(--border-strong); }
+    .diag-answer { font-size: 0.85rem; color: var(--ink-2); flex: 1; min-width: 200px; }
+    .diag-body { padding: 14px 16px; font-size: 0.9rem; }
+    .diag-body .row { margin-bottom: 8px; }
+    .diag-body .row:last-child { margin-bottom: 0; }
+    .diag-body .k { font-weight: 700; color: var(--ink-2); font-size: 0.8rem; display: block; margin-bottom: 2px; }
+
+    /* ===== Modal ===== */
+    .modal-overlay { position: fixed; inset: 0; background: rgba(20,26,40,0.45); backdrop-filter: blur(3px); display: none; align-items: center; justify-content: center; z-index: 1000; padding: 20px; }
+    .modal-overlay.visible { display: flex; }
+    .modal { background: var(--surface); border-radius: var(--r-lg); box-shadow: 0 20px 60px rgba(0,0,0,0.25); max-width: 640px; width: 100%; max-height: 88vh; display: flex; flex-direction: column; animation: pop 0.2s ease; }
+    @keyframes pop { from { opacity: 0; transform: translateY(16px) scale(0.98); } to { opacity: 1; transform: none; } }
+    .modal-head { padding: 18px 24px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
+    .modal-title { font-size: 1.1rem; font-weight: 700; }
+    .modal-x { background: none; border: none; font-size: 1.5rem; color: var(--ink-3); cursor: pointer; line-height: 1; }
+    .modal-x:hover { color: var(--ink); }
+    .modal-body { padding: 22px 24px; overflow-y: auto; }
+    .modal-foot { padding: 15px 24px; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: 10px; background: var(--surface-2); border-radius: 0 0 var(--r-lg) var(--r-lg); }
+    .subject-btns { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+    .sample-preview { max-height: 340px; overflow-y: auto; font-size: 0.8rem; background: var(--surface-2); padding: 15px; border-radius: var(--r); border: 1px solid var(--border); white-space: pre-wrap; word-wrap: break-word; }
+
+    #toast { position: fixed; top: 22px; left: 50%; transform: translateX(-50%); z-index: 2000; max-width: 90%; display: none; padding: 13px 22px; border-radius: 10px; font-size: 0.92rem; font-weight: 600; color: #fff; box-shadow: 0 8px 30px rgba(0,0,0,0.2); }
+
+    .spinner { width: 17px; height: 17px; border: 2.5px solid rgba(255,255,255,0.35); border-top-color: #fff; border-radius: 50%; animation: spin 0.7s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    footer { text-align: center; margin-top: 36px; font-size: 0.8rem; color: var(--ink-3); }
+
+    @media (max-width: 820px) {
+      .step-label span { display: none; }
+      .step { padding: 13px 10px; justify-content: center; }
+      .step-label b { font-size: 0.85rem; }
+      .card-body { padding: 16px; }
+      .doc-viewer { padding: 22px 18px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <div class="topbar">
+      <div class="brand">
+        <div class="brand-mark">채</div>
+        <div>
+          <h1>서술형 채점 성향 분석기</h1>
+          <div class="sub">루브릭 + 채점 데이터 → 교사 맞춤 채점 안내문</div>
+        </div>
+      </div>
+      <div class="solar-badge"><span class="dot"></span>Solar Pro 3 · 키 입력 불필요</div>
+    </div>
+
+    <div id="toast"></div>
+
+    <!-- Stepper -->
+    <div class="stepper" role="tablist">
+      <button class="step active" data-step="1"><span class="step-num">1</span><span class="step-label"><b>시험 정보</b><span>만점 · 루브릭</span></span></button>
+      <button class="step" data-step="2"><span class="step-num">2</span><span class="step-label"><b>답안 입력</b><span>답안 · 점수 · 이유</span></span></button>
+      <button class="step" data-step="3" disabled><span class="step-num">3</span><span class="step-label"><b>성향 분석</b><span>AI 분석 결과</span></span></button>
+      <button class="step" data-step="4" disabled><span class="step-num">4</span><span class="step-label"><b>안내문 · 검증</b><span>산출물 · 진단</span></span></button>
+    </div>
+
+    <!-- ========== STEP 1 ========== -->
+    <div class="panel active" id="panel-1">
+      <div class="card">
+        <div class="card-head">
+          <span class="card-title">만점 설정 <span class="tag">정규화</span></span>
+        </div>
+        <div class="card-body">
+          <div class="max-score-row">
+            <div>
+              <label for="maxScore" style="font-size:0.92rem; font-weight:600; display:block; margin-bottom:7px;">이 문항의 만점</label>
+              <input type="number" id="maxScore" value="100" min="1" max="1000" step="0.5">
+            </div>
+            <div class="norm-note">
+              10점, 20점, 100점 등 <b>어떤 만점이든 그대로 입력</b>하세요. 내부에서 100점 기준으로 정규화해 분석하고, 결과는 다시 원래 만점으로 환산해 보여드립니다.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <span class="card-title">루브릭 입력</span>
+          <button class="btn btn-ghost btn-sm" id="sampleBtn" type="button">샘플 데이터 불러오기</button>
+        </div>
+        <div class="card-body">
+          <div class="field">
+            <textarea id="rubric" placeholder="학생에게 배부한 루브릭을 그대로 붙여넣으세요. (문항, 채점 기준, 배점, 예시 답안 등)&#10;&#10;상세할수록 분석 정확도가 높아집니다."></textarea>
+            <p class="hint">채점 기준과 항목별 배점이 구체적일수록 성향 분석이 정확해집니다.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="nav-row">
+        <span></span>
+        <button class="btn btn-primary" id="toStep2">다음 : 답안 입력 →</button>
+      </div>
+    </div>
+
+    <!-- ========== STEP 2 ========== -->
+    <div class="panel" id="panel-2">
+      <div class="card">
+        <div class="card-head">
+          <span class="card-title">학생 답안 · 교사 채점 <span class="tag" id="scaleTag">만점 100점</span></span>
+          <span style="font-size:0.83rem; color:var(--ink-2);">최소 7개 · 권장 10~20개 (검증용 3개는 자동 분리)</span>
+        </div>
+        <div class="card-body">
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th style="width:36px;">#</th>
+                  <th class="answer-col">답안 텍스트</th>
+                  <th style="width:110px;">교사 점수</th>
+                  <th style="min-width:190px;">채점 이유 (선택 · 강력 권장)</th>
+                  <th style="width:40px;"></th>
+                </tr>
+              </thead>
+              <tbody id="answersBody"></tbody>
+            </table>
+          </div>
+          <div style="display:flex; gap:10px; justify-content:center; margin-top:16px;">
+            <button class="btn btn-ghost" id="addRowBtn" type="button">+ 행 추가</button>
+          </div>
+          <p class="hint" style="text-align:center; margin-top:10px;">Ctrl+Enter : 마지막 행에서 새 행 추가</p>
+        </div>
+      </div>
+
+      <div class="nav-row">
+        <button class="btn btn-ghost" id="backTo1">← 시험 정보</button>
+        <button class="btn btn-primary" id="analyzeBtn">
+          <span class="btn-text">분석 시작</span>
+          <span class="spinner" style="display:none;"></span>
+        </button>
+      </div>
+    </div>
+
+    <!-- ========== STEP 3 ========== -->
+    <div class="panel" id="panel-3">
+      <div id="analysisAlert" style="display:none;"></div>
+
+      <div class="card" id="progressCard" style="display:none;">
+        <div class="progress-card">
+          <div class="progress-pct" id="progressPct">0%</div>
+          <div class="progress-stage" id="progressStage">분석 준비 중...</div>
+          <div class="progress-elapsed" id="progressElapsed"></div>
+          <div class="progress-track"><div class="progress-fill" id="progressFill"></div></div>
+          <ul class="progress-steps" id="progressSteps"></ul>
+        </div>
+      </div>
+
+      <div id="resultsArea" style="display:none;">
+        <div class="card">
+          <div class="card-head"><span class="card-title">채점 성향 요약</span></div>
+          <div class="card-body">
+            <div id="normInfoAlert"></div>
+            <ul class="tendency-list" id="tendencyList"></ul>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <span class="card-title">루브릭 기계 채점 vs 교사 채점</span>
+            <span style="font-size:0.82rem; color:var(--ink-2);">차이가 곧 「성향」의 원재료입니다</span>
+          </div>
+          <div class="card-body">
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th style="width:36px;">#</th>
+                    <th class="answer-col">답안 요약</th>
+                    <th class="center" style="width:120px;">교사 점수</th>
+                    <th class="center" style="width:120px;">AI 루브릭 점수</th>
+                    <th class="center" style="width:110px;">차이</th>
+                  </tr>
+                </thead>
+                <tbody id="comparisonBody"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div class="nav-row">
+          <button class="btn btn-ghost" id="backTo2">← 답안 입력</button>
+          <button class="btn btn-primary" id="toStep4">다음 : 안내문 · 검증 →</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ========== STEP 4 ========== -->
+    <div class="panel" id="panel-4">
+      <div class="card">
+        <div class="card-head">
+          <span class="card-title">최종 채점 안내문</span>
+          <button class="btn btn-ghost btn-sm" id="copyDocBtn" disabled>전체 복사</button>
+        </div>
+        <div class="doc-viewer" id="docViewer">분석 완료 후 채점 안내문이 여기에 생성됩니다.</div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <span class="card-title">검증 : 분리해 둔 답안으로 재현도 확인</span>
+        </div>
+        <div class="card-body">
+          <p style="font-size:0.88rem; color:var(--ink-2); margin-bottom:14px;">
+            분석에 쓰지 않고 떼어둔 답안을 「루브릭만」 / 「루브릭+성향」 두 방식으로 채점해 교사 실제 점수와 비교합니다. 성향 반영 채점이 교사 점수에 가까울수록 분석이 잘 된 것입니다.
+          </p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th style="width:36px;">#</th>
+                  <th class="answer-col">답안 요약</th>
+                  <th class="center" style="width:120px;">교사 실제</th>
+                  <th class="center" style="width:120px;">루브릭만</th>
+                  <th class="center" style="width:130px;">루브릭+성향</th>
+                  <th class="center" style="width:110px;">판정</th>
+                </tr>
+              </thead>
+              <tbody id="validationBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" id="diagCard" style="display:none;">
+        <div class="card-head">
+          <span class="card-title">불일치 원인 진단</span>
+          <span style="font-size:0.82rem; color:var(--ink-2);">시스템 문제인지, 교사 채점 특이점인지 짚어드립니다</span>
+        </div>
+        <div class="card-body" id="diagBody"></div>
+      </div>
+
+      <div class="nav-row">
+        <button class="btn btn-ghost" id="backTo3">← 성향 분석</button>
+        <span></span>
+      </div>
+    </div>
+
+    <footer>Solar Pro 3 (Upstage) 기반 · 입력 데이터는 분석 요청에만 사용되며 저장되지 않습니다</footer>
+  </div>
+
+  <!-- Sample Modal -->
+  <div class="modal-overlay" id="sampleModal">
+    <div class="modal">
+      <div class="modal-head">
+        <span class="modal-title">샘플 데이터 불러오기</span>
+        <button class="modal-x" id="sampleClose">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p style="font-size:0.88rem; color:var(--ink-2); margin-bottom:12px;">과목을 선택하면 서술형 루브릭과 가상 학생 답안 12개(채점 이유 포함)가 채워집니다.</p>
+        <div class="subject-btns" id="subjectBtns"></div>
+        <div class="sample-preview" id="samplePreview"></div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn btn-ghost" id="sampleCancel">취소</button>
+        <button class="btn btn-primary" id="sampleApply">적용하기</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ==================== STATE ====================
+    const state = {
+      maxScore: 100,
+      rubric: '',
+      answers: [],            // { id, text, score(원척도), reason }
+      validationAnswers: [],
+      analysisAnswers: [],
+      tendencies: [],
+      calibration: [],
+      overallOffset: 0,
+      comparisonData: [],
+      finalDocument: '',
+      validationResults: [],
+      diagnoses: [],
+      isAnalyzing: false,
+      analysisDone: false
+    };
+
+    // ==================== 정규화 ====================
+    // 내부 분석은 전부 0~100 정규화 점수로, 표시는 원척도로.
+    const norm = s => Math.round(s / state.maxScore * 100);
+    const denorm = n => {
+      const v = n / 100 * state.maxScore;
+      return Math.round(v * 10) / 10;
+    };
+    const fmtOrig = n => {
+      const v = denorm(n);
+      return (v % 1 === 0 ? v.toFixed(0) : v.toFixed(1));
+    };
+
+    // ==================== DOM ====================
+    const $ = id => document.getElementById(id);
+    const steps = document.querySelectorAll('.step');
+    const panels = document.querySelectorAll('.panel');
+
+    function goStep(n) {
+      steps.forEach(b => b.classList.toggle('active', +b.dataset.step === n));
+      panels.forEach(p => p.classList.toggle('active', p.id === 'panel-' + n));
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+    steps.forEach(b => b.addEventListener('click', () => { if (!b.disabled) goStep(+b.dataset.step); }));
+    $('toStep2').addEventListener('click', () => {
+      state.rubric = $('rubric').value;
+      if (!state.rubric.trim()) { showToast('루브릭을 먼저 입력해주세요.', 'warn'); $('rubric').focus(); return; }
+      steps[1].classList.add('done'); goStep(2);
+    });
+    $('backTo1').addEventListener('click', () => goStep(1));
+    $('backTo2').addEventListener('click', () => goStep(2));
+    $('backTo3').addEventListener('click', () => goStep(3));
+    $('toStep4').addEventListener('click', () => goStep(4));
+
+    // 만점 변경
+    $('maxScore').addEventListener('change', () => {
+      const v = parseFloat($('maxScore').value);
+      if (!v || v <= 0) { $('maxScore').value = state.maxScore; return; }
+      state.maxScore = v;
+      $('scaleTag').textContent = `만점 ${v}점`;
+      renderAnswersTable();
+    });
+
+    // ==================== TOAST / ALERT ====================
+    const toastEl = $('toast');
+    let toastTimer = null;
+    function showToast(msg, type = 'info') {
+      const bg = { bad: '#c73a3a', warn: '#b97f10', good: '#1d8a4e', info: '#3d56c5' }[type] || '#3d56c5';
+      toastEl.style.display = 'block'; toastEl.style.background = bg; toastEl.textContent = msg;
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => { toastEl.style.display = 'none'; }, 7000);
+    }
+    function showAlert(el, msg, type = 'info') {
+      el.innerHTML = `<div class="alert alert-${type}">${msg}</div>`;
+      el.style.display = 'block';
+    }
+    function hideAlert(el) { el.style.display = 'none'; el.innerHTML = ''; }
+
+    // ==================== ANSWERS TABLE ====================
+    const answersBody = $('answersBody');
+    const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2);
+    const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    const truncate = (t, n = 70) => t.length > n ? t.slice(0, n) + '…' : t;
+
+    function renderAnswersTable() {
+      if (state.answers.length === 0) {
+        answersBody.innerHTML = `<tr class="empty-row"><td colspan="5">답안이 없습니다. '행 추가' 또는 1단계의 '샘플 데이터 불러오기'를 이용하세요.</td></tr>`;
+        return;
+      }
+      answersBody.innerHTML = state.answers.map((a, i) => `
+        <tr data-id="${a.id}">
+          <td style="font-weight:700; color:var(--ink-3);">${i + 1}</td>
+          <td class="answer-col"><textarea data-f="text" rows="2">${esc(a.text)}</textarea></td>
+          <td><input type="number" data-f="score" value="${a.score}" min="0" max="${state.maxScore}" step="0.5">
+            <span class="norm-sub">/ ${state.maxScore}점</span></td>
+          <td><textarea data-f="reason" rows="2" placeholder="왜 이 점수를 주었는지">${esc(a.reason || '')}</textarea></td>
+          <td><button class="del-btn" data-del="${a.id}" aria-label="삭제">×</button></td>
+        </tr>`).join('');
+
+      answersBody.querySelectorAll('[data-f]').forEach(el => {
+        el.addEventListener('change', e => {
+          const id = e.target.closest('tr').dataset.id;
+          const ans = state.answers.find(x => x.id === id);
+          if (!ans) return;
+          const f = e.target.dataset.f;
+          ans[f] = f === 'score' ? (parseFloat(e.target.value) || 0) : e.target.value;
+        });
+      });
+      answersBody.querySelectorAll('[data-del]').forEach(b => {
+        b.addEventListener('click', e => {
+          state.answers = state.answers.filter(x => x.id !== e.target.dataset.del);
+          renderAnswersTable();
+        });
+      });
+    }
+    function addAnswerRow(d = { text: '', score: 0, reason: '' }) {
+      state.answers.push({ id: uid(), ...d });
+      renderAnswersTable();
+    }
+    $('addRowBtn').addEventListener('click', () => addAnswerRow());
+    document.addEventListener('keydown', e => {
+      if (e.key === 'Enter' && e.ctrlKey && document.activeElement.tagName === 'TEXTAREA') {
+        const rows = answersBody.querySelectorAll('tr[data-id]');
+        const last = rows[rows.length - 1];
+        if (last && document.activeElement.closest('tr') === last) { e.preventDefault(); addAnswerRow(); }
+      }
+    });
+
+    // ==================== SAMPLE DATA ====================
+    const sampleSubjects = {
+      math: {
+        name: '수학', maxScore: 100,
+        rubric: `[수학 서술형 채점 루브릭] - 단원: 도형의 넓이 (중2)\n\n문제: 아래 그림에서 사각형 ABCD의 넓이를 구하시오. (단, AB // CD, AB = 8cm, CD = 12cm, 높이 = 5cm)\n\n[채점 기준 - 총 100점]\n1. 사다리꼴 넓이 공식 제시 및 이해 (20점)\n   - 사다리꼴 넓이 공식 (윗변+아랫변)×높이÷2 을 정확히 서술: 20점\n   - 공식만 쓰고 변수 대입 없음: 10점\n   - 공식 오기 또는 미제시: 0점\n\n2. 주어진 조건 대입 정확성 (30점)\n   - 윗변 8, 아랫변 12, 높이 5를 공식에 정확히 대입: 30점\n   - 한 개 변수 누락/오기: 15점\n   - 두 개 이상 오기: 0점\n\n3. 계산 과정 및 결과 정확성 (30점)\n   - (8+12)×5÷2 = 50cm² 정확한 계산 및 단위 표기: 30점\n   - 계산 과정은 맞으나 단위 미표기: 25점\n   - 계산 실수(산술 오류): 15점\n   - 계산 과정 생략/오류: 0점\n\n4. 풀이 과정 논리성 및 설명 (20점)\n   - 사다리꼴임을 인식하고 공식 유도 과정을 논리적으로 설명: 20점\n   - 공식만 대입하고 설명 부족: 10점\n   - 설명 없음 또는 비논리적: 0점`,
+        answers: [
+          { text: "사다리꼴 넓이 공식은 (윗변+아랫변)×높이÷2입니다. 윗변 8과 아랫변 12를 더해 20, 높이 5를 곱해 100, 2로 나누어 50cm²입니다.", score: 100, reason: "공식 명칭 서술, 대입 정확, 계산 정확, 단위 표기, 논리적 설명 충분" },
+          { text: "삼각형 두 개로 나눠서 (8×5÷2)+(12×5÷2) = 20+30 = 50cm²", score: 95, reason: "루브릭 공식이 아닌 삼각형 분해 대안 풀이지만 수학적으로 타당하고 계산·단위·설명 모두 충실. 대안 풀이 가점 인정" },
+          { text: "사다리꼴 넓이 공식: (윗변+아랫변)×높이÷2 = (8+12)×5÷2 = 50cm²", score: 95, reason: "공식 명칭 서술, 대입·계산 정확, 단위 표기, 설명 간결(-5)" },
+          { text: "사다리꼴 넓이 공식 (윗변+아랫변)×높이÷2을 쓴다. (8+12)×5÷2 = 50", score: 90, reason: "공식 명칭 서술, 대입·계산 정확, 설명 충분, 단위 미표기 감점(-10)" },
+          { text: "공식: (a+b)h/2. a=8, b=12, h=5. (8+12)×5÷2 = 100÷2 = 50cm²", score: 85, reason: "공식 명칭 미기재(기호식만) 감점(-10), 대입·계산 정확, 단위 표기, 설명 간결(-5)" },
+          { text: "사다리꼴 넓이 = (윗변+아랫변)×높이÷2 = (8+12)×5÷2 = 20×2.5 = 50", score: 80, reason: "공식 명칭 서술, 대입·계산 정확, 단위 미표기 감점(-10), 20×2.5 과정 생략 느낌 감점(-5), 설명 간결(-5)" },
+          { text: "사다리꼴 공식: (윗변+아랫변)×높이÷2. (8+12)×5÷2 = 100÷2 = 50", score: 75, reason: "공식 명칭 서술, 대입·계산 정확, 단위 미표기 감점(-10), 설명 부재 감점(-15)" },
+          { text: "(윗변+아랫변)×높이÷2 = (8+12)×5÷2 = 50cm²", score: 75, reason: "공식 명칭 미기재 감점(-10), 단위 표기, 계산 정확, 설명 부재 감점(-15)" },
+          { text: "(8+12)×5÷2 = 50", score: 65, reason: "공식 명칭 미기재(-10), 단위 미표기(-10), 설명 부재(-15) — 세 가지 결함 모두 감점, 계산은 정확" },
+          { text: "사다리꼴 넓이 = (8+12)×5 = 100cm²", score: 55, reason: "공식 명칭 미기재(-10), 계산 오류(÷2 생략)로 큰 감점(-30), 단위 표기" },
+          { text: "사다리꼴 넓이 = 밑변×높이 = 12×5 = 60cm²", score: 50, reason: "평행사변형 넓이 공식 오적용으로 대폭 감점(-50). 계산과 단위는 정확하나 논리 오류 큼" },
+          { text: "삼각형 넓이 공식으로 풀었어요. 밑변×높이÷2 = 12×5÷2 = 30cm²", score: 40, reason: "도형을 삼각형으로 오인, 공식 오적용 및 논리 오류로 대폭 감점(-60)" }
+        ]
+      },
+      korean: {
+        name: '국어', maxScore: 100,
+        rubric: `[국어 서술형 채점 루브릭] - 단원: 독서 논설문 요약 (중3)\n\n문제: 다음 논설문의 주장과 근거를 자신의 언어로 요약하시오. (150~200자)\n\n[채점 기준 - 총 100점]\n1. 주장 파악 정확성 (30점)\n   - 글의 핵심 주장을 정확히 파악해 서술: 30점\n   - 주장을 비슷하게 파악하나 표현이 모호: 15점\n   - 주장 오파악 또는 누락: 0점\n\n2. 근거 제시 (30점)\n   - 본문의 핵심 근거 2개 이상을 정확히 제시: 30점\n   - 근거 1개만 제시하거나 부분적: 15점\n   - 근거 미제시 또는 오류: 0점\n\n3. 논리적 구성 및 연결 (20점)\n   - 주장-근거가 논리적으로 구조화: 20점\n   - 나열만 하고 연결 미흡: 10점\n   - 비문·비약으로 논리 단절: 0점\n\n4. 표현 및 어휘 (20점)\n   - 정확하고 간결한 어휘, 문장 완결성: 20점\n   - 어휘 오용이나 문장이 매끄럽지 않음: 10점\n   - 비문·오타 심함: 0점`,
+        answers: [
+          { text: "이 글은 '인공지능 교육은 학생 개인의 역량에 맞춰 단계적으로 도입해야 한다'고 주장한다. 그 근거로 첫째, 개인차를 무시한 일괄 도입은 격차를 심화시키고, 둘째, 교사 전문성을 살리는 보조 도구로 쓸 때 효과가 크다는 점을 든다.", score: 100, reason: "주장 정확, 근거 2개 명확, 논리 구조 완결, 표현 정확 간결" },
+          { text: "글쓴이는 AI 교육을 단계적으로 도입해야 한다고 주장해요. 이유는 격차 문제와 교사 활용 때문이라고 합니다.", score: 90, reason: "주장 정확, 근거 2개 제시, 논리 연결 간결하나 다소 축약(-10)" },
+          { text: "글의 주장은 AI 교육 단계적 도입이다. 근거: 격차 심화, 교사 전문성.", score: 80, reason: "주장·근거 정확하나 문장이 단편적 나열로 구성·연결 미흡(-20)" },
+          { text: "AI 교육은 단계적으로 해야 한다고 주장한다. 개인차 무시하면 격차가 커진다. 또 교사 전문성을 살려야 한다.", score: 75, reason: "주장·근거 2개 있으나 '교사 전문성을 살려야 한다'는 결과적 서술로 근거 설명 부족(-10), 구성 약간 느슨(-10)" },
+          { text: "이 글은 AI 교육의 단계적 도입을 주장한다. 근거는 첫째 격차, 둘째 교사입니다. 그래서 단계적 도입이 맞습니다.", score: 70, reason: "주장·근거 있으나 표현 반복·두루뭉술(-15), 논리 연결 미흡(-15)" },
+          { text: "AI 교육을 빨리 도입해야 한다는 내용이다.", score: 55, reason: "주장 오파악('빨리'로 왜곡), 근거 미제시(-30), 논리·표현 미흡(-15)" },
+          { text: "인공지능 교육, 단계적 도입 주장. 격차. 교사.", score: 40, reason: "주장은 파악했으나 근거를 단어 나열로만 제시, 비문·비약으로 논리 단절(-40), 표현 오류(-20)" },
+          { text: "이 글은 AI 교육은 좋다고 주장한다. 격차가 심해지고 교사가 힘들어짐. 그래서 단계적이 아니라 당장 해야 함.", score: 35, reason: "주장 오파악, 근거 왜곡(교사 힘듦), 논리 비약·결론 반전(-50), 표현 오류(-15)" },
+          { text: "주장: AI 교육 단계적 도입. 근거 1) 개인차 무시 시 격차 2) 교사 전문성 활용 시 효과. 이는 교육 공평성과 교사 역할을 보호하기 위함이다.", score: 95, reason: "주장·근거 정확, 핵심 의도까지 설명해 논리 구조 우수, 표현 정확(-5)" },
+          { text: "AI 교육 단계적 도입 주장하고, 격차랑 교사 근거 제시함. 글쓴이는 선생님을 위한 것 같음.", score: 65, reason: "주장·근거 파악했으나 주관적 추측·구어체 표현 오류(-20), 논리 연결 미흡(-15)" },
+          { text: "주장은 AI 교육을 개인 역량에 맞춰 단계적으로 하는 것이다. 근거는 개인차에 따른 격차 심화다. 문단별로 분석하면 첫 문단에서 문제를 제기하고 결론부에서 제안을 강화한다.", score: 85, reason: "주장·근거 1개 정확, 글 구조 분석은 있으나 근거 2개 미충족(-10), 설명 장황(-5)" },
+          { text: "AI 교육을 '단계적' 도입을 주장한다. 근거: 첫째 격차 해소, 둘째 교사 활용. 따라서 전 교과에 균일 적용보다 맞춤형 도입이 바람직하다.", score: 92, reason: "주장·근거 정확, 논리 구조 우수, 결론 정리 명확(-8)" }
+        ]
+      },
+      english: {
+        name: '영어', maxScore: 100,
+        rubric: `[영어 서술형 채점 루브릭] - 단원: 의견 글쓰기 (중2)\n\n문제: "Schools should ban smartphones." 에 대한 자신의 의견을 3문장 이상의 영어로 쓰시오.\n\n[채점 기준 - 총 100점]\n1. 의견 (Opinion) 명확성 (30점)\n   - 의견(찬성/반대)이 명확히 제시: 30점\n   - 의견이 모호하거나 중립 모호: 15점\n   - 의견 미제시: 0점\n\n2. 근거·이유 (Reasons) (30점)\n   - 근거 2개 이상을 구체적으로 제시: 30점\n   - 근거 1개 또는 추상적: 15점\n   - 근거 없음: 0점\n\n3. 문법·문장 구조 (Grammar) (20점)\n   - 문법·어순·시제 정확: 20점\n   - 오류 1~2개: 10점\n   - 오류 다수로 이해 곤란: 0점\n\n4. 어휘 및 완성도 (Vocabulary & Length) (20점)\n   - 풍부한 어휘, 요구 문장 수 충족: 20점\n   - 단순 어휘, 문장 수 부족: 10점\n   - 미완성/길이 미달: 0점`,
+        answers: [
+          { text: "I think smartphones should be banned at schools because they distract students' attention during class. Also, they can cause unfair access between students who have and don't have devices. Instead, students can use school computers when needed.", score: 100, reason: "의견 명확, 근거 2개 구체, 문법 정확, 어휘 다양, 문장 길이 충족" },
+          { text: "In my opinion, schools should ban smartphones. First, students often play games in class. Second, some students feel left out. So I agree with the ban.", score: 92, reason: "의견 명확, 근거 2개, 문법 대체로 정확, 다소 단순한 어휘(-8)" },
+          { text: "I believe smartphones should be banned. They make a lot of noise and students fight. It is better for learning. Therefore, banning is a good idea.", score: 85, reason: "의견·근거 2개 있으나 근거가 구체성 부족(추상적)(-10), 약간 단순 어휘(-5)" },
+          { text: "Smartphones should be banned because they are bad.", score: 55, reason: "의견 명확하나 근거 1개·추상적(-15), 문법 정확하나 문장 수·어휘 부족(-20), 미완성(-10)" },
+          { text: "I think smartphones should be banned at school, because students watch TikTok and do not listen, and also they compare their phones and it hurt poor students' feel.", score: 70, reason: "의견·근거 2개 있으나 표현 오류('it hurt', 'feel')(-15), 어휘·문장 구조 미흡(-15)" },
+          { text: "Phones should be banned. They distract. They cause cyberbullying too. So ban them. Schools will be safer. That is why.", score: 60, reason: "근거 나열이나 문장 단편화·구조 미흡(-20), 문장 수는 충족하나 논리 연결 약함(-20)" },
+          { text: "I think banning smartphones is necessary for maintaining classroom focus and ensuring equal educational opportunities. Students without devices otherwise face disadvantage. In addition, offline interaction improves when phones are removed, which fosters better peer relationships.", score: 98, reason: "의견 명확, 근거 3개 구체, 문법·어휘 우수, 길이 충족(-2)" },
+          { text: "smartphone should banned in school. because many student use phone and not focus. teacher can't control class. so it is problem.", score: 35, reason: "주어·시제·수일치 심각 오류(-30), 근거 나열이나 문단 구성 미흡(-15), 문장 구조 다수 오류(-20)" },
+          { text: "Schools should ban smartphones to reduce distraction and prevent cyberbullying. Also, it helps students concentrate on their studies. Therefore, I strongly support the ban.", score: 95, reason: "의견 명확, 근거 2~3개, 문법 정확, 표현 자연스러움(-5)" },
+          { text: "I agree smartphones should be banned. In class students are distracted by notifications. This lowers academic performance. Additionally, mental health can improve without constant social media.", score: 90, reason: "의견·근거 2개, 문법 정확, 근거 3째가 약간 추상적(-10)" },
+          { text: "Ban phones. They bad for students. Learning fall. So no phones. This my opinion.", score: 30, reason: "문법·어순 심각 오류('They bad', 'fall', 'This my')(-30), 근거 추상(-10), 길이 미달·완성도 낮음(-30)" },
+          { text: "I think schools should NOT ban smartphones, because they are useful learning tools for research and communication. However, schools should set rules for appropriate use.", score: 88, reason: "반대 의견 명확, 근거·대안 제시, 문법 정확, 근거 2개이지만 길이 다소 짧음(-12)" }
+        ]
+      },
+      science: {
+        name: '과학', maxScore: 100,
+        rubric: `[과학 서술형 채점 루브릭] - 단원: 식물의 광합성 (중1)\n\n문제: 광합성의 조건과 결과물을 설명하시오.\n\n[채점 기준 - 총 100점]\n1. 광합성 조건 제시 (30점)\n   - 빛, 엽록소, 이산화탄소, 물 등 조건을 정확히 제시: 30점\n   - 조건 1~2개 누락: 15점\n   - 조건 전무 또는 오류: 0점\n\n2. 결과물 제시 (30점)\n   - 포도당(양분)과 산소 생성 정확히 서술: 30점\n   - 결과물 일부 누락 또는 오류: 15점\n   - 결과물 오류: 0점\n\n3. 개념 이해 및 원리 설명 (20점)\n   - 에너지 전환(빛에너지→화학에너지) 설명: 20점\n   - 원리 설명 미흡: 10점\n   - 원리 오류: 0점\n\n4. 정확성 및 용어 (20점)\n   - 과학 용어 정확, 오개념 없음: 20점\n   - 용어 오용 1~2개: 10점\n   - 오개념 심함: 0점`,
+        answers: [
+          { text: "광합성은 빛 에너지가 있을 때 엽록소가 들어있는 엽록체에서 이산화탄소와 물로 포도당과 산소를 만드는 과정이다. 이때 빛 에너지가 화학 에너지로 전환되어 포도당에 저장된다.", score: 100, reason: "조건·결과물·원리·용어 모두 정확, 핵심 과정 명시" },
+          { text: "광합성은 빛, 엽록소, 이산화탄소, 물을 이용해 포도당과 산소를 만든다. 햇빛 에너지를 화학 에너지로 바꾸어 저장한다.", score: 95, reason: "조건·결과물·원리 모두 정확, 설명 간결(-5)" },
+          { text: "광합성은 이산화탄소와 물로 포도당과 산소를 만드는 것이다.", score: 75, reason: "결과물·조건 일부 제시, 빛·엽록소 조건 누락(-10), 원리(에너지 전환) 미제시(-10), 용어 정확(-5)" },
+          { text: "광합성에 빛과 물이 필요하고, 포도당이 만들어진다. 엽록소에서 일어난다.", score: 80, reason: "조건 일부(엽록소·빛·물), 결과물 일부(포도당, 산소 누락)(-10), 원리 미흡(-10)" },
+          { text: "식물은 광합성으로 산소를 만든다. 이 과정에 빛이 필요하다.", score: 65, reason: "조건 누락(엽록소·이산화탄소·물)(-15), 결과물 일부(포도당 누락)(-10), 원리 없음(-10)" },
+          { text: "광합성은 식물이 숨 쉬는 것이다. 빛이 있으면 이산화탄소를 내보낸다.", score: 30, reason: "호흡과 혼동 오개념(-30), 조건·결과물 모두 오류(-30), 용어 오용" },
+          { text: "광합성 조건은 빛, 엽록소, 이산화탄소, 물이고 결과는 포도당과 산소이다. 즉, 6CO2 + 6H2O → C6H12O6 + 6O2 이다.", score: 95, reason: "조건·결과물 정확, 화학식으로 정확히 보강(+5), 원리 설명은 미흡(-10)" },
+          { text: "빛과 엽록소로 이산화탄소와 물에서 산소만 만들어진다. 포도당은 안 만들어진다.", score: 40, reason: "결과물 오류(포도당 부정)(-30), 조건 일부(-10), 오개념 심함" },
+          { text: "광합성에서 빛에너지가 화학에너지로 바뀌어 포도당에 저장된다. 조건은 빛·물·이산화탄소·엽록소이고 산소가 부산물로 나온다.", score: 98, reason: "원리·조건·결과물 모두 정확, 산소를 부산물로 정확히 표현(-2)" },
+          { text: "식물이 광합성을 하면 포도당이 생긴다. 물은 뿌리에서 흡수하고 빛은 잎에서 받는다.", score: 85, reason: "조건·결과물 일부, 이산화탄소 명시 누락(-10), 원리 미흡(-5)" },
+          { text: "광합성: 자극 + 이산화탄소 → 포도당 + 산소. 식물은 자극이 있어야 한다.", score: 35, reason: "'자극'은 광합성 조건 오류 오개념(-30), 개념 혼동(-25), 용어 오류" },
+          { text: "광합성은 엽록체에서 빛을 이용해 이산화탄소와 물로 포도당을 만들고 산소를 방출하는 반응이며, 빛 에너지를 화학 에너지로 전환한다.", score: 98, reason: "조건·결과물·원리·용어 모두 정확, 설명 체계적(-2)" }
+        ]
+      }
+    };
+
+    let curSubject = 'math';
+    function renderSubjectBtns() {
+      $('subjectBtns').innerHTML = Object.keys(sampleSubjects).map(k =>
+        `<button type="button" class="btn btn-sm ${k === curSubject ? 'btn-primary' : 'btn-ghost'}" data-subj="${k}">${sampleSubjects[k].name}</button>`).join('');
+      $('subjectBtns').querySelectorAll('[data-subj]').forEach(b =>
+        b.addEventListener('click', () => { curSubject = b.dataset.subj; renderSubjectBtns(); renderSamplePreview(); }));
+    }
+    function renderSamplePreview() {
+      const d = sampleSubjects[curSubject];
+      let p = `=== 루브릭 (만점 ${d.maxScore}점) ===\n${d.rubric}\n\n=== 답안 ${d.answers.length}개 ===\n`;
+      d.answers.forEach((a, i) => { p += `\n[답안 ${i + 1}] 점수: ${a.score}\n${a.text}\n이유: ${a.reason}\n`; });
+      $('samplePreview').textContent = p;
+    }
+    $('sampleBtn').addEventListener('click', () => { renderSubjectBtns(); renderSamplePreview(); $('sampleModal').classList.add('visible'); });
+    $('sampleClose').addEventListener('click', () => $('sampleModal').classList.remove('visible'));
+    $('sampleCancel').addEventListener('click', () => $('sampleModal').classList.remove('visible'));
+    $('sampleModal').addEventListener('click', e => { if (e.target === $('sampleModal')) $('sampleModal').classList.remove('visible'); });
+    $('sampleApply').addEventListener('click', () => {
+      const d = sampleSubjects[curSubject];
+      state.rubric = d.rubric; $('rubric').value = d.rubric;
+      state.maxScore = d.maxScore; $('maxScore').value = d.maxScore;
+      $('scaleTag').textContent = `만점 ${d.maxScore}점`;
+      state.answers = d.answers.map(a => ({ ...a, id: uid() }));
+      renderAnswersTable();
+      $('sampleModal').classList.remove('visible');
+      showToast(`[${d.name}] 샘플이 적용되었습니다. 2단계에서 답안을 확인 후 분석을 시작하세요.`, 'good');
+      steps[1].classList.add('done');
+      goStep(2);
+    });
+
+    // ==================== PROGRESS ====================
+    // 실제 AI 호출 단위 기반 진행률: 각 단위가 끝날 때마다 % 갱신
+    const progress = {
+      units: [], done: 0, startAt: 0, timer: null,
+      init(unitLabels) {
+        this.units = unitLabels; this.done = 0; this.startAt = Date.now();
+        $('progressCard').style.display = 'block';
+        $('resultsArea').style.display = 'none';
+        $('progressSteps').innerHTML = unitLabels.map((u, i) => `<li id="pu-${i}">${u}</li>`).join('');
+        this.render('분석 준비 중...');
+        clearInterval(this.timer);
+        this.timer = setInterval(() => {
+          const s = Math.floor((Date.now() - this.startAt) / 1000);
+          $('progressElapsed').textContent = `경과 ${Math.floor(s / 60)}분 ${s % 60}초 · 단계 ${Math.min(this.done + 1, this.units.length)}/${this.units.length}`;
+        }, 1000);
+      },
+      render(stageText) {
+        const pct = Math.round(this.done / this.units.length * 100);
+        $('progressPct').textContent = pct + '%';
+        $('progressFill').style.width = pct + '%';
+        $('progressStage').textContent = stageText;
+        this.units.forEach((_, i) => {
+          const li = $('pu-' + i);
+          if (!li) return;
+          li.className = i < this.done ? 'done' : (i === this.done ? 'now' : '');
+        });
+      },
+      start(i) { this.render(this.units[i] + ' 진행 중...'); },
+      finish(i) { this.done = Math.max(this.done, i + 1); this.render(this.done >= this.units.length ? '분석 완료!' : this.units[this.done] + ' 진행 중...'); },
+      end() { clearInterval(this.timer); $('progressCard').style.display = 'none'; }
+    };
+
+    // ==================== SOLAR API ====================
+    async function callLLM(prompt, systemPrompt = '', temperature = 0.3) {
+      const res = await fetch('/api/solar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: [
+            ...(systemPrompt ? [{ role: 'system', content: systemPrompt }] : []),
+            { role: 'user', content: prompt }
+          ],
+          temperature
+        })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `서버 오류 (${res.status})`);
+      return data.content;
+    }
+
+    function parseJsonFromResponse(text) {
+      if (!text) return null;
+      const cb = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+      const s = cb ? cb[1] : text;
+      try { return JSON.parse(s.trim()); } catch (e) {
+        const om = s.match(/\{[\s\S]*\}/);
+        if (om) { try { return JSON.parse(om[0]); } catch (e2) {} }
+        const am = s.match(/\[[\s\S]*\]/);
+        if (am) { try { return JSON.parse(am[0]); } catch (e3) {} }
+        throw new Error('AI 응답 해석 실패: ' + text.slice(0, 150));
+      }
+    }
+
+    // ==================== PIPELINE ====================
+    const clamp100 = v => Math.max(0, Math.min(100, Math.round(v)));
+    const scoreToBand = s => s >= 90 ? 'A' : s >= 80 ? 'B' : s >= 70 ? 'C' : s >= 60 ? 'D' : 'F';
+    const bandsMatch = (a, b) => scoreToBand(a) === scoreToBand(b) || Math.abs(a - b) <= 10;
+
+    async function runAnalysis() {
+      if (state.isAnalyzing) return;
+      state.rubric = $('rubric').value;
+      const alertEl = $('analysisAlert');
+
+      if (!state.rubric.trim()) { showToast('루브릭을 입력해주세요. (1단계)', 'warn'); goStep(1); return; }
+      const valid = state.answers.filter(a => a.text.trim() && a.score >= 0 && a.score <= state.maxScore);
+      const outOfRange = state.answers.filter(a => a.text.trim() && (a.score < 0 || a.score > state.maxScore));
+      if (outOfRange.length) { showToast(`만점(${state.maxScore}점)을 벗어난 점수가 ${outOfRange.length}개 있습니다. 수정해주세요.`, 'bad'); return; }
+      if (valid.length < 7) { showToast('최소 7개 이상의 유효한 답안이 필요합니다.', 'warn'); return; }
+      if (valid.length > 20) showToast('답안은 최대 20개까지만 분석에 사용됩니다.', 'warn');
+
+      const hasReasons = valid.some(a => a.reason && a.reason.trim());
+
+      // 정규화된 사본 생성
+      const normalized = valid.slice(0, 20).map(a => ({ ...a, normScore: norm(a.score) }));
+      const nScores = normalized.map(a => a.normScore);
+      const spread = Math.max(...nScores) - Math.min(...nScores);
+
+      state.isAnalyzing = true; state.analysisDone = false;
+      const btn = $('analyzeBtn');
+      btn.disabled = true; btn.querySelector('.btn-text').textContent = '분석 중...';
+      btn.querySelector('.spinner').style.display = 'inline-block';
+      hideAlert(alertEl);
+      steps[2].disabled = false;
+      goStep(3);
+
+      let warnMsgs = [];
+      if (!hasReasons) warnMsgs.push('채점 이유가 하나도 없습니다. 이유가 있으면 분석이 훨씬 정확해집니다.');
+      if (spread < 15) warnMsgs.push(`점수 분포가 좁습니다 (정규화 기준 폭 ${spread}점). 분석 신뢰도가 낮을 수 있습니다.`);
+      if (warnMsgs.length) showAlert(alertEl, warnMsgs.join('<br>'), 'warn');
+
+      progress.init([
+        '데이터 준비 · 검증용 답안 분리',
+        'AI 루브릭 채점 (교사 점수 미참조)',
+        '채점 성향 추출 · 보정표 생성',
+        '맞춤 채점 안내문 작성',
+        '검증 답안 채점 (루브릭만)',
+        '검증 답안 채점 (성향 반영, 3회 앙상블)',
+        '불일치 원인 진단'
+      ]);
+
+      try {
+        // [0] 층화 분리
+        progress.start(0);
+        const sorted = [...normalized].sort((a, b) => a.normScore - b.normScore);
+        const n = sorted.length;
+        const valCount = Math.min(3, Math.max(1, Math.floor(n * 0.2)));
+        const low = sorted.slice(0, Math.floor(n / 3));
+        const mid = sorted.slice(Math.floor(n / 3), Math.floor(2 * n / 3));
+        const high = sorted.slice(Math.floor(2 * n / 3));
+        const pick = (arr, k) => [...arr].sort(() => Math.random() - 0.5).slice(0, k);
+        const per = Math.max(1, Math.floor(valCount / 3));
+        const picks = [...pick(low, per), ...pick(mid, per), ...pick(high, valCount - 2 * per)].slice(0, valCount);
+        const pickIds = new Set(picks.map(a => a.id));
+        state.validationAnswers = picks;
+        state.analysisAnswers = sorted.filter(a => !pickIds.has(a.id));
+        progress.finish(0);
+
+        // [1] AI 루브릭 채점
+        progress.start(1);
+        const aiScores = await gradeWithRubricOnly(state.rubric, state.analysisAnswers);
+        progress.finish(1);
+
+        // [2] 성향 추출
+        progress.start(2);
+        const tr = await extractTendencies(state.rubric, state.analysisAnswers, aiScores);
+        state.tendencies = tr.tendencies;
+        state.calibration = tr.calibration;
+        const aiMean = aiScores.reduce((s, x) => s + x, 0) / aiScores.length;
+        const tMean = state.analysisAnswers.reduce((s, a) => s + a.normScore, 0) / state.analysisAnswers.length;
+        state.overallOffset = Math.round(tMean - aiMean);
+        if (state.overallOffset !== 0) {
+          state.tendencies.push(`이 교사는 루브릭 기계 채점 대비 전반적으로 ${Math.abs(state.overallOffset)}점(100점 정규화 기준) 정도 ${state.overallOffset < 0 ? '엄격하게' : '관대하게'} 채점하는 경향이 있다`);
+        }
+        state.comparisonData = state.analysisAnswers.map((a, i) => ({
+          answer: a, teacherNorm: a.normScore, aiNorm: aiScores[i], diff: aiScores[i] - a.normScore
+        }));
+        renderAnalysisResults();
+        progress.finish(2);
+
+        // [3] 안내문 생성
+        progress.start(3);
+        state.finalDocument = await generateFinalDocument();
+        progress.finish(3);
+
+        // [4] 검증: 루브릭만
+        progress.start(4);
+        const rubricOnly = await gradeWithRubricOnly(state.rubric, state.validationAnswers);
+        progress.finish(4);
+
+        // [5] 검증: 성향 반영 (3회 병렬 앙상블)
+        progress.start(5);
+        const tendencyScores = await predictWithTendency(rubricOnly);
+        state.validationResults = state.validationAnswers.map((a, i) => ({
+          answer: a,
+          teacherNorm: a.normScore,
+          rubricNorm: rubricOnly[i],
+          tendencyNorm: tendencyScores[i],
+          rubricMatch: bandsMatch(rubricOnly[i], a.normScore),
+          tendencyMatch: bandsMatch(tendencyScores[i], a.normScore)
+        }));
+        progress.finish(5);
+
+        // [6] 불일치 진단
+        progress.start(6);
+        state.diagnoses = await diagnoseMismatches();
+        progress.finish(6);
+
+        state.analysisDone = true;
+        steps[2].classList.add('done'); steps[3].disabled = false;
+        renderOutputResults();
+        progress.end();
+        $('resultsArea').style.display = 'block';
+        showToast('분석이 완료되었습니다. 결과를 확인하세요.', 'good');
+
+      } catch (err) {
+        console.error(err);
+        progress.end();
+        showAlert(alertEl, `<b>분석 중 오류:</b> ${esc(err.message)}<br>잠시 후 「분석 시작」을 다시 눌러주세요.`, 'bad');
+        showToast('분석 중 오류가 발생했습니다: ' + err.message, 'bad');
+      } finally {
+        state.isAnalyzing = false;
+        btn.disabled = false;
+        btn.querySelector('.btn-text').textContent = '분석 시작';
+        btn.querySelector('.spinner').style.display = 'none';
+      }
+    }
+
+    async function gradeWithRubricOnly(rubric, answers) {
+      const systemPrompt = `당신은 엄격한 교과 교사입니다. 주어진 루브릭만을 기준으로 학생 답안을 채점하세요.
+교사의 실제 점수나 채점 이유는 절대 참조하지 마세요. 점수는 0~100 정규화 척도입니다.
+
+[채점 방법 - 반드시 준수]
+1. 루브릭의 항목별 배점 구조를 정확히 분해하세요.
+2. 각 항목별로 해당 배점 구간을 판정하고, 항목 점수를 합산해 총점을 내세요. (루브릭 만점이 100점이 아니면 100점 만점으로 비율 환산)
+3. 루브릭에 명시된 감점 조건을 빠짐없이 적용하세요 (명칭·서술 누락, 설명 부재, 단위 미표기, 과정 생략 등).
+4. 정답이 맞다고 무조건 만점을 주지 마세요. 모든 항목이 충족될 때만 만점입니다.
+
+출력 형식: JSON 배열만. [{"score": 정수, "reason": "항목별 배점 근거"}, ...]`;
+      const prompt = `다음 루브릭의 항목별 배점을 정확히 준수하여 각 답안을 채점하세요.\n\n[루브릭]\n${rubric}\n\n[답안들]\n${answers.map((a, i) => `${i + 1}. ${a.text}`).join('\n\n')}\n\nJSON 배열로만 응답하세요. 답안 개수(${answers.length}개)와 배열 길이가 같아야 합니다.`;
+      const r = parseJsonFromResponse(await callLLM(prompt, systemPrompt, 0.1));
+      if (!Array.isArray(r) || r.length !== answers.length) throw new Error('AI 채점 결과 개수가 맞지 않습니다. 다시 시도해주세요.');
+      return r.map(x => clamp100(Number(x.score)));
+    }
+
+    async function extractTendencies(rubric, answers, aiScores) {
+      const penaltyCases = [], bonusCases = [], matchCases = [];
+      answers.forEach((a, i) => {
+        const diff = aiScores[i] - a.normScore;
+        const item = { idx: i, answer: a.text.slice(0, 250), teacherScore: a.normScore, aiScore: aiScores[i], diff, reason: a.reason || '' };
+        if (Math.abs(diff) < 5) matchCases.push(item);
+        else if (diff > 0) penaltyCases.push(item);
+        else bonusCases.push(item);
+      });
+
+      const systemPrompt = `당신은 채점 분석 전문가입니다. 교사가 루브릭 대비 어떤 점에서 가점/감점하는지 분석하세요. 점수는 전부 0~100 정규화 척도입니다.
+
+[분석 절차 - 내부 추론 후 결과만 출력]
+1. 답안별로 교사가 루브릭 대비 어디에 가점/감점했는지 분석 (교사 이유·diff 근거)
+2. 감점/가점/대안풀이 패턴 클러스터링
+3. 3~6개 핵심 성향 일반화 (구체적·행동 지향적 문장)
+4. 각 성향의 평균 점수 영향 폭을 숫자로 추정 (실제 diff 데이터 근거, 예: "-10~-15")
+
+[중요]
+- 감점 케이스(교사<루브릭)와 가점 케이스(교사>루브릭)를 반드시 따로 분석.
+- 대안 풀이 가점 패턴이 있으면 성향에 반드시 포함.
+
+[출력 - JSON만, 이 2개 키만]
+{"step3_tendencies": ["이 교사는 ~", ...], "step3_calibration": [{"성향":"...","방향":"감점","평균점수범위":"-10~-15","적용조건":"..."}]}`;
+
+      const prompt = `[루브릭]\n${rubric}\n\n[감점 케이스 (교사<루브릭, ${penaltyCases.length}개)]\n${JSON.stringify(penaltyCases, null, 1)}\n\n[가점 케이스 (교사>루브릭, ${bonusCases.length}개)]\n${JSON.stringify(bonusCases, null, 1)}\n\n[일치 케이스 (${matchCases.length}개)]\n${JSON.stringify(matchCases, null, 1)}\n\n위 절차대로 분석해 JSON으로 응답하세요.`;
+
+      const parsed = parseJsonFromResponse(await callLLM(prompt, systemPrompt, 0.2));
+      let tendencies = [];
+      if (parsed && Array.isArray(parsed.step3_tendencies)) tendencies = parsed.step3_tendencies.slice(0, 6);
+      else if (Array.isArray(parsed)) tendencies = parsed.slice(0, 6);
+      let calibration = [];
+      if (parsed && Array.isArray(parsed.step3_calibration)) {
+        calibration = parsed.step3_calibration.slice(0, 8).map(c => ({
+          성향: c.성향 || c.tendency || '', 방향: c.방향 || c.direction || '',
+          평균점수범위: c.평균점수범위 || c.점수범위 || c.scoreRange || '', 적용조건: c.적용조건 || c.condition || ''
+        }));
+      }
+      return { tendencies, calibration };
+    }
+
+    async function generateFinalDocument() {
+      const calibText = state.calibration.length
+        ? state.calibration.map((c, i) => `${i + 1}. [${c.방향}] ${c.성향} — 평균 ${c.평균점수범위}점 (조건: ${c.적용조건})`).join('\n')
+        : '(양적 보정값 없음)';
+      const scaleNote = state.maxScore !== 100
+        ? `\n\n[중요 - 점수 척도] 이 시험의 실제 만점은 ${state.maxScore}점입니다. 아래 분석 수치는 100점 정규화 기준이므로, 안내문 마지막에 "정규화 점수 × ${state.maxScore}/100 = 실제 점수" 환산 규칙을 별도 섹션으로 명시하세요.`
+        : '';
+      const systemPrompt = `당신은 채점 안내문 작성 전문가입니다. 기존 루브릭에 교사의 채점 성향을 반영한 완성된 채점 안내문을 작성하세요.
+구성: 1) 기존 루브릭(원문 유지) 2) 교사 채점 성향 분석 결과(각 성향에 양적 보정값 명시) 3) 종합 채점 가이드라인(보정값 기반 실용 지침)
+전문적이고 격식 있는 문체. 마크다운 기호 남용 금지.`;
+      const prompt = `[기존 루브릭]\n${state.rubric}\n\n[분석된 교사 채점 성향]\n${state.tendencies.map((t, i) => `${i + 1}. ${t}`).join('\n')}\n\n[양적 보정표]\n${calibText}\n\n[전체 엄격성 오프셋]\n교사는 루브릭 대비 평균 ${state.overallOffset > 0 ? '+' : ''}${state.overallOffset}점 (100점 정규화 기준, 음수=엄격, 양수=관대)${scaleNote}\n\n위 내용을 통합해, 다른 채점자가 그대로 쓸 수 있을 만큼 구체적이고 실용적인 최종 채점 안내문을 작성하세요.`;
+      return await callLLM(prompt, systemPrompt, 0.4);
+    }
+
+    async function predictWithTendency(rubricOnlyScores) {
+      const va = state.validationAnswers;
+      const calibText = state.calibration.length
+        ? state.calibration.map((c, i) => `${i + 1}. [${c.방향}] ${c.성향} → 평균 ${c.평균점수범위}점 (조건: ${c.적용조건})`).join('\n')
+        : '(없음)';
+      const systemPrompt = `당신은 특정 교사의 채점 행동을 정확히 모델링하는 전문가입니다. 점수는 0~100 정규화 척도입니다.
+
+각 답안에 [루브릭만 채점한 기준점수]가 주어집니다. 기준점수에서 반드시 수치적으로 가감해 이 교사의 최종 점수를 예측하세요.
+
+[예측 방법]
+1. 기준점수에서 시작.
+2. 보정표의 각 조건이 답안에 해당하면 그 점수 폭만큼 반드시 가감.
+3. 여러 조건 해당 시 모두 누적 적용.
+4. 전체 엄격성 오프셋 반영.
+5. 최종 = 기준점수 + 보정 합계 (0~100 제한).
+
+[경고] 기준점수가 100이라도 보정 조건에 해당하면 반드시 낮추세요.
+
+[양적 보정표]\n${calibText}
+
+[전체 엄격성 오프셋] 평균 ${state.overallOffset > 0 ? '+' : ''}${state.overallOffset}점
+
+출력: JSON 배열만 [{"score": 예측점수, "reason": "기준 X점 + 보정 내역 → 최종 Y점"}, ...]`;
+      const prompt = `[최종 채점 안내문]\n${state.finalDocument}\n\n[답안 + 루브릭 기준점수]\n${va.map((a, i) => `${i + 1}. 기준점수: ${rubricOnlyScores[i]}\n   답안: ${a.text}`).join('\n\n')}\n\n각 답안의 이 교사 예상 점수를 보정표 기반으로 예측하세요. JSON 배열로만 응답. 배열 길이 ${va.length}.`;
+
+      const ENSEMBLE = 3;
+      const runs = await Promise.all(Array.from({ length: ENSEMBLE }, async () => {
+        try {
+          const parsed = parseJsonFromResponse(await callLLM(prompt, systemPrompt, 0.7));
+          return Array.isArray(parsed) ? parsed.map(r => clamp100(Number(r.score))) : [];
+        } catch (e) { return []; }
+      }));
+      return va.map((_, i) => {
+        const vals = runs.map(r => r[i]).filter(v => Number.isFinite(v));
+        if (!vals.length) return rubricOnlyScores[i];
+        const s = [...vals].sort((a, b) => a - b);
+        return s[Math.floor(s.length / 2)];
+      });
+    }
+
+    async function diagnoseMismatches() {
+      const mism = state.validationResults.filter(v => !v.tendencyMatch);
+      if (!mism.length) return [];
+      const systemPrompt = `당신은 AI 채점 시스템 감사관입니다. 「교사 실제 점수」와 「성향 반영 AI 예측」이 크게 어긋난 사례의 원인을 진단하세요. 점수는 0~100 정규화 척도입니다.
+
+각 사례에 대해 원인 유형을 하나 고르세요:
+- "SYSTEM_MISS": 성향 분석이 이 답안에 적용될 감점/가점 요인을 포착하지 못함 (시스템 한계)
+- "SYSTEM_OVER": 보정을 과도하게 적용해 예측이 어긋남 (시스템 한계)
+- "RUBRIC_AMBIGUOUS": 루브릭 자체가 모호해 어느 채점도 확정하기 어려움 (루브릭 보완 필요)
+- "TEACHER_INCONSISTENT": 이 답안에 대한 교사 채점이 교사 본인의 다른 채점 패턴·성향과 어긋남 (교사 재검토 권장)
+
+판단 근거: 교사의 채점 이유, 추출된 성향 목록, 루브릭, 점수 차이의 방향.
+교사 채점을 지적할 때는 정중하되 구체적으로 (어느 답안과 비교해 어떻게 어긋나는지).
+
+출력: JSON 배열만 [{"index": 사례번호, "type": "위 4개 중 하나", "explanation": "원인 설명 2~3문장", "suggestion": "개선 제안 1~2문장"}]`;
+      const prompt = `[루브릭]\n${state.rubric}\n\n[추출된 교사 성향]\n${state.tendencies.map((t, i) => `${i + 1}. ${t}`).join('\n')}\n\n[교사의 전체 채점 패턴 참고 (분석에 사용된 답안들)]\n${state.analysisAnswers.map((a, i) => `- 답안: ${a.text.slice(0, 120)} / 교사점수: ${a.normScore} / 이유: ${a.reason || '없음'}`).join('\n')}\n\n[불일치 사례들]\n${mism.map((v, i) => `사례 ${i + 1}:\n답안: ${v.answer.text}\n교사 실제: ${v.teacherNorm} (이유: ${v.answer.reason || '없음'})\n루브릭만 채점: ${v.rubricNorm}\n성향 반영 예측: ${v.tendencyNorm}`).join('\n\n')}\n\n각 사례의 원인을 진단해 JSON 배열로만 응답하세요. 배열 길이 ${mism.length}.`;
+      try {
+        const parsed = parseJsonFromResponse(await callLLM(prompt, systemPrompt, 0.3));
+        if (!Array.isArray(parsed)) return [];
+        return mism.map((v, i) => ({ item: v, diag: parsed[i] || null }));
+      } catch (e) {
+        return mism.map(v => ({ item: v, diag: null }));
+      }
+    }
+
+    // ==================== RENDER ====================
+    function scorePair(normVal) {
+      const sub = state.maxScore !== 100 ? `<span class="norm-sub">정규화 ${normVal}</span>` : '';
+      return `${fmtOrig(normVal)}<span style="font-weight:500; opacity:0.7;">/${state.maxScore % 1 === 0 ? state.maxScore : state.maxScore.toFixed(1)}</span>${sub}`;
+    }
+
+    function renderAnalysisResults() {
+      // 정규화 안내
+      $('normInfoAlert').innerHTML = state.maxScore !== 100
+        ? `<div class="alert alert-info">이 시험의 만점은 <b>${state.maxScore}점</b>입니다. 분석은 100점 정규화 기준으로 수행되었고, 표의 점수는 원래 만점으로 환산해 표시합니다.</div>`
+        : '';
+
+      $('tendencyList').innerHTML = state.tendencies.length
+        ? state.tendencies.map((t, i) => {
+            const up = /가점|관대|후하|높이|더 준다/.test(t);
+            const down = /감점|엄격|박하|낮게|깎/.test(t);
+            const cls = up ? 'up' : down ? 'down' : 'flat';
+            const ch = up ? '▲' : down ? '▼' : '•';
+            return `<li class="tendency-item"><span class="t-icon ${cls}">${ch}</span><span class="t-text"><b>${i + 1}.</b> ${esc(t)}</span></li>`;
+          }).join('')
+        : '<li class="tendency-item"><span class="t-icon flat">•</span><span class="t-text">추출된 성향이 없습니다.</span></li>';
+
+      $('comparisonBody').innerHTML = state.comparisonData.length
+        ? state.comparisonData.map((d, i) => {
+            const a = Math.abs(d.diff);
+            const cls = a >= 20 ? 'd-lg' : a >= 10 ? 'd-md' : 'd-sm';
+            return `<tr>
+              <td style="font-weight:700; color:var(--ink-3);">${i + 1}</td>
+              <td class="answer-col" style="font-size:0.87rem;">${esc(truncate(d.answer.text, 80))}</td>
+              <td class="center"><span class="score-badge teacher">${scorePair(d.teacherNorm)}</span></td>
+              <td class="center"><span class="score-badge ai">${scorePair(d.aiNorm)}</span></td>
+              <td class="center"><span class="score-badge ${cls}">${d.diff > 0 ? '+' : ''}${fmtOrig(Math.abs(d.diff)) * (d.diff < 0 ? -1 : 1)}</span></td>
+            </tr>`;
+          }).join('')
+        : '<tr class="empty-row"><td colspan="5">비교 데이터가 없습니다.</td></tr>';
+    }
+
+    const DIAG_META = {
+      SYSTEM_MISS: { label: '시스템 한계 · 성향 미포착', cls: 'system' },
+      SYSTEM_OVER: { label: '시스템 한계 · 보정 과도', cls: 'system' },
+      RUBRIC_AMBIGUOUS: { label: '루브릭 모호 · 보완 필요', cls: 'rubric' },
+      TEACHER_INCONSISTENT: { label: '교사 채점 재검토 권장', cls: 'teacher' }
+    };
+
+    function renderOutputResults() {
+      $('docViewer').textContent = state.finalDocument || '생성된 안내문이 없습니다.';
+      $('copyDocBtn').disabled = !state.finalDocument;
+
+      $('validationBody').innerHTML = state.validationResults.length
+        ? state.validationResults.map((v, i) => `
+          <tr>
+            <td style="font-weight:700; color:var(--ink-3);">${i + 1}</td>
+            <td class="answer-col" style="font-size:0.87rem;">${esc(truncate(v.answer.text, 60))}</td>
+            <td class="center"><span class="score-badge teacher">${scorePair(v.teacherNorm)}</span></td>
+            <td class="center"><span class="score-badge ai">${scorePair(v.rubricNorm)}</span> ${v.rubricMatch ? '✓' : '✗'}</td>
+            <td class="center"><span class="score-badge ai">${scorePair(v.tendencyNorm)}</span> ${v.tendencyMatch ? '✓' : '✗'}</td>
+            <td class="center"><span class="score-badge ${v.tendencyMatch ? 'd-sm' : 'd-lg'}">${v.tendencyMatch ? '일치' : '불일치'}</span></td>
+          </tr>`).join('')
+        : '<tr class="empty-row"><td colspan="6">검증 결과가 없습니다.</td></tr>';
+
+      // 불일치 진단
+      const diagCard = $('diagCard');
+      const mismCount = state.validationResults.filter(v => !v.tendencyMatch).length;
+      if (!state.validationResults.length) { diagCard.style.display = 'none'; return; }
+      diagCard.style.display = 'block';
+      if (mismCount === 0) {
+        $('diagBody').innerHTML = `<div class="alert alert-good" style="margin-bottom:0;"><b>모든 검증 답안이 일치했습니다.</b> 추출된 성향이 이 교사의 채점을 잘 재현합니다. 안내문을 그대로 활용하셔도 좋습니다.</div>`;
+        return;
+      }
+      $('diagBody').innerHTML =
+        `<div class="alert alert-warn">검증 답안 ${state.validationResults.length}개 중 <b>${mismCount}개가 불일치</b>했습니다. 아래 진단을 참고해 원인을 확인하세요.</div>` +
+        state.diagnoses.map(({ item, diag }, i) => {
+          const meta = diag && DIAG_META[diag.type] ? DIAG_META[diag.type] : { label: '진단 실패', cls: 'etc' };
+          const body = diag
+            ? `<div class="row"><span class="k">원인 설명</span>${esc(diag.explanation || '')}</div>
+               <div class="row"><span class="k">개선 제안</span>${esc(diag.suggestion || '')}</div>`
+            : `<div class="row">이 사례는 자동 진단에 실패했습니다. 점수 차이를 직접 확인해주세요.</div>`;
+          return `<div class="diag-card">
+            <div class="diag-head">
+              <span class="diag-type ${meta.cls}">${meta.label}</span>
+              <span class="diag-answer">${esc(truncate(item.answer.text, 70))}</span>
+              <span style="font-size:0.8rem; color:var(--ink-2); white-space:nowrap;">교사 ${fmtOrig(item.teacherNorm)} · 예측 ${fmtOrig(item.tendencyNorm)}</span>
+            </div>
+            <div class="diag-body">${body}</div>
+          </div>`;
+        }).join('');
+    }
+
+    // ==================== MISC ====================
+    $('analyzeBtn').addEventListener('click', runAnalysis);
+    $('copyDocBtn').addEventListener('click', async () => {
+      if (!state.finalDocument) return;
+      await navigator.clipboard.writeText(state.finalDocument);
+      const b = $('copyDocBtn'); const t = b.textContent;
+      b.textContent = '복사됨 ✓';
+      setTimeout(() => { b.textContent = t; }, 2000);
+    });
+    $('rubric').addEventListener('input', () => { state.rubric = $('rubric').value; });
+
+    // init
+    addAnswerRow();
+    $('rubric').focus();
+  </script>
+</body>
+</html>

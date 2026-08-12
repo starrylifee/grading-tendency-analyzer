@@ -6,6 +6,10 @@ node_modules/
 *.xlsx
 *.xls
 *.csv
+*.hwp
+*.hwpx
+*.docx
+*.txt
 data/
 개인정보/
 *채점데이터*

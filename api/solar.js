@@ -4,12 +4,17 @@ module.exports = async (req, res) => {
     return res.status(405).json({ error: 'POST 요청만 허용됩니다.' });
   }
 
-  // 같은 사이트에서 온 요청만 허용 — 외부인이 이 엔드포인트로 무료 LLM을 남용하는 것 차단.
-  // 브라우저 fetch는 same-origin POST에도 Origin 헤더를 보내므로, 그 host가 배포 host와 같아야 통과.
-  const host = req.headers.host || '';
+  // 이 앱 도메인에서 온 브라우저 요청만 허용 — 외부인의 무료 LLM 남용 차단.
+  // Origin은 클라이언트가 보내는 값이라 위조 가능하지만(완전 차단은 레이트리밋/서명 필요),
+  // 클라이언트가 준 Host와 비교하는 대신 서버가 아는 배포 도메인 화이트리스트와 대조해 Host 위조 벡터는 막는다.
   const originHeader = req.headers.origin || req.headers.referer || '';
   let originOk = false;
-  try { originOk = !!originHeader && new URL(originHeader).host === host; } catch (e) { originOk = false; }
+  try {
+    const oh = new URL(originHeader).host;
+    originOk = oh === 'grading-tendency-analyzer.vercel.app'
+      || /^grading-tendency-analyzer[a-z0-9-]*\.vercel\.app$/.test(oh)  // 프리뷰 배포
+      || /^localhost(:\d+)?$/.test(oh);                                  // 로컬 개발
+  } catch (e) { originOk = false; }
   if (!originOk) {
     return res.status(403).json({ error: '이 앱 화면에서만 사용할 수 있습니다.' });
   }

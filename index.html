@@ -500,6 +500,7 @@
       validationResults: [],
       validationRubricOnly: [],
       diagnoses: [],
+      selfConsistency: null,  // AI 반복 채점 일치율(%) — 재현율의 천장
       round: 1,               // 보정 회차 (연구 루프의 vN에 해당)
       roundHistory: [],       // [{round, matches, total}]
       isAnalyzing: false,
@@ -947,6 +948,7 @@
       progress.init([
         '데이터 준비 · 검증용 답안 분리',
         'AI 루브릭 채점 (교사 점수 미참조)',
+        '자기일관성 측정 (표본 3개 반복 채점)',
         '채점 성향 추출 · 보정표 생성',
         '맞춤 채점 안내문 작성',
         '검증 답안 채점 (루브릭만)',
@@ -976,8 +978,13 @@
         const aiScores = await gradeWithRubricOnly(state.rubric, state.analysisAnswers, (d, t) => progress.note(1, `${d}/${t} 답안 완료`));
         progress.finish(1);
 
-        // [2] 성향 추출
+        // [2] 자기일관성 측정 — 재현율의 천장
         progress.start(2);
+        state.selfConsistency = await measureSelfConsistency(aiScores);
+        progress.finish(2);
+
+        // [3] 성향 추출
+        progress.start(3);
         const tr = await extractTendencies(state.rubric, state.analysisAnswers, aiScores);
         state.tendencies = tr.tendencies;
         state.calibration = tr.calibration;
@@ -994,21 +1001,21 @@
           answer: a, teacherNorm: a.normScore, aiNorm: aiScores[i], diff: aiScores[i] - a.normScore
         }));
         renderAnalysisResults();
-        progress.finish(2);
-
-        // [3] 안내문 생성
-        progress.start(3);
-        state.finalDocument = await generateFinalDocument();
         progress.finish(3);
 
-        // [4] 검증: 루브릭만
+        // [4] 안내문 생성
         progress.start(4);
-        const rubricOnly = await gradeWithRubricOnly(state.rubric, state.validationAnswers, (d, t) => progress.note(4, `${d}/${t} 답안 완료`));
-        state.validationRubricOnly = rubricOnly;
+        state.finalDocument = await generateFinalDocument();
         progress.finish(4);
 
-        // [5] 검증: 성향 반영 (3회 병렬 앙상블)
+        // [5] 검증: 루브릭만
         progress.start(5);
+        const rubricOnly = await gradeWithRubricOnly(state.rubric, state.validationAnswers, (d, t) => progress.note(5, `${d}/${t} 답안 완료`));
+        state.validationRubricOnly = rubricOnly;
+        progress.finish(5);
+
+        // [6] 검증: 성향 반영 (3회 병렬 앙상블)
+        progress.start(6);
         const tendencyScores = await predictWithTendency(rubricOnly);
         state.validationResults = state.validationAnswers.map((a, i) => ({
           answer: a,
@@ -1018,12 +1025,12 @@
           rubricMatch: bandsMatch(rubricOnly[i], a.normScore),
           tendencyMatch: bandsMatch(tendencyScores[i], a.normScore)
         }));
-        progress.finish(5);
-
-        // [6] 불일치 진단
-        progress.start(6);
-        state.diagnoses = await diagnoseMismatches();
         progress.finish(6);
+
+        // [7] 불일치 진단
+        progress.start(7);
+        state.diagnoses = await diagnoseMismatches();
+        progress.finish(7);
 
         state.round = 1;
         state.roundHistory = [{ round: 1, matches: state.validationResults.filter(v => v.tendencyMatch).length, total: state.validationResults.length }];
@@ -1079,6 +1086,27 @@
         if (isGrade) return parseGradeResult(obj, prompt, systemPrompt);
         return clamp100(Number(obj.score));
       }));
+    }
+
+    // 자기일관성: 저/중/고 점수대 표본 3개를 2회씩 추가 채점(1회차 결과 포함 총 3회)해
+    // 같은 결과가 나오는 비율을 측정한다. 이 수치가 AI 재현율의 천장이다.
+    async function measureSelfConsistency(aiScores) {
+      const n = state.analysisAnswers.length;
+      const idxs = n <= 3 ? state.analysisAnswers.map((_, i) => i) : [0, Math.floor(n / 2), n - 1]; // 정렬 상태이므로 저/중/고
+      let done = 0; const total = idxs.length * 2;
+      const agrees = await Promise.all(idxs.map(async idx => {
+        const a = state.analysisAnswers[idx];
+        const extra = await Promise.all([0, 1].map(async () => {
+          const s = await gradeWithRubricOnly(state.rubric, [a]);
+          progress.note(2, `${++done}/${total} 반복 채점`);
+          return s[0];
+        }));
+        const three = [aiScores[idx], ...extra];
+        return state.mode === 'grade'
+          ? three.every(v => normToGrade(v) === normToGrade(three[0]))
+          : (Math.max(...three) - Math.min(...three)) <= 5;
+      }));
+      return Math.round(agrees.filter(Boolean).length / agrees.length * 100);
     }
 
     async function extractTendencies(rubric, answers, aiScores) {
@@ -1188,9 +1216,9 @@
         const vals = await Promise.all(Array.from({ length: ENSEMBLE }, async () => {
           try {
             const obj = await callJSONObject(prompt, systemPrompt, 0.7);
-            progress.note(5, `${++done}/${total} 예측 완료`);
+            progress.note(6, `${++done}/${total} 예측 완료`);
             return isGrade ? await parseGradeResult(obj, prompt, systemPrompt) : clamp100(Number(obj.score));
-          } catch (e) { progress.note(5, `${++done}/${total} 예측 완료`); return NaN; }
+          } catch (e) { progress.note(6, `${++done}/${total} 예측 완료`); return NaN; }
         }));
         const ok = vals.filter(v => Number.isFinite(v));
         if (!ok.length) return rubricOnlyScores[i];
@@ -1247,11 +1275,14 @@
 
     function renderAnalysisResults() {
       // 정규화 안내
-      $('normInfoAlert').innerHTML = state.mode === 'grade'
+      const scAlert = state.selfConsistency !== null
+        ? `<div class="alert ${state.selfConsistency >= 80 ? 'alert-info' : 'alert-warn'}"><b>자기일관성 ${state.selfConsistency}%</b> — AI가 같은 답안을 3회 반복 채점했을 때 같은 결과가 나온 비율입니다. 성향 재현율은 이 수치를 넘기 어렵습니다(재현율의 천장). ${state.selfConsistency < 80 ? '일관성이 낮으면 불일치 일부는 교사 성향이 아니라 AI 흔들림일 수 있습니다.' : ''}</div>`
+        : '';
+      $('normInfoAlert').innerHTML = scAlert + (state.mode === 'grade'
         ? `<div class="alert alert-info">등급제(<b>${state.gradeLabels.join('/')}</b>) 분석입니다. 내부적으로 등급을 100점 척도(${state.gradeLabels.map(l => l + '=' + gradeToNorm(l)).join(', ')})로 정규화해 분석했고, 표에는 등급으로 표시합니다.</div>`
         : (state.maxScore !== 100
           ? `<div class="alert alert-info">이 시험의 만점은 <b>${state.maxScore}점</b>입니다. 분석은 100점 정규화 기준으로 수행되었고, 표의 점수는 원래 만점으로 환산해 표시합니다.</div>`
-          : '');
+          : ''));
 
       $('tendencyList').innerHTML = state.tendencies.length
         ? state.tendencies.map((t, i) => {
